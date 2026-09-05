@@ -344,3 +344,53 @@ export async function releaseConversationRun(env: Env, conversationId: string, r
     ).bind(conversationId, runId)
   );
 }
+
+export interface StoppedReplySnapshot {
+  messageId: string;
+  text: string;
+  regenerate: boolean;
+}
+
+// A stop request can reach a different Worker before socket cancellation reaches
+// the streaming Worker. Save the visible text and release its lease atomically.
+export async function finishStoppedConversationRun(
+  env: Env, conversationId: string, runId: string, partial?: StoppedReplySnapshot
+): Promise<void> {
+  if (!partial?.text.trim()) return releaseConversationRun(env, conversationId, runId);
+  const now = Date.now();
+  const statements: D1PreparedStatement[] = [];
+  if (partial.regenerate) {
+    const regenerationId = `regen_${runId}`;
+    statements.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO assistant_regenerations (id, message_id, content, created_at)
+      SELECT ?, m.id, ?, ? FROM messages m JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.id = ? AND c.active_run_id = ? AND c.active_run_expires_at > ?
+        AND m.id = ? AND m.role = 'assistant'
+        AND NOT EXISTS (SELECT 1 FROM messages later WHERE later.conversation_id = c.id AND later.position > m.position)
+    `).bind(regenerationId, partial.text, now, conversationId, runId, now, partial.messageId));
+    statements.push(env.DB.prepare(`
+      UPDATE messages SET selected_regeneration_id = ?, updated_at = ?
+      WHERE id = ? AND conversation_id = ?
+        AND EXISTS (SELECT 1 FROM conversations WHERE id = ? AND active_run_id = ? AND active_run_expires_at > ?)
+        AND EXISTS (SELECT 1 FROM assistant_regenerations WHERE id = ? AND message_id = messages.id)
+    `).bind(regenerationId, now, partial.messageId, conversationId, conversationId, runId, now, regenerationId));
+  } else {
+    // IDs are derived from the accepted run; a snapshot cannot replace history.
+    if (partial.messageId !== `message_${runId}`) {
+      throw new AppError(400, "INVALID_STOPPED_REPLY", "The stopped reply does not match this run.");
+    }
+    statements.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO messages
+        (id, conversation_id, position, role, content, edited, created_at, updated_at, selected_regeneration_id)
+      SELECT ?, c.id, (SELECT COALESCE(MAX(position), -1) + 1 FROM messages WHERE conversation_id = c.id),
+        'assistant', ?, 0, ?, ?, NULL FROM conversations c
+      WHERE c.id = ? AND c.active_run_id = ? AND c.active_run_expires_at > ?
+    `).bind(partial.messageId, partial.text, now, now, conversationId, runId, now));
+  }
+  statements.push(env.DB.prepare(`
+    UPDATE conversations SET active_run_id = NULL, active_run_expires_at = NULL,
+      updated_at = ?, last_message_at = ?, version = version + 1
+    WHERE id = ? AND active_run_id = ?
+  `).bind(now, now, conversationId, runId));
+  await env.DB.batch(statements);
+}

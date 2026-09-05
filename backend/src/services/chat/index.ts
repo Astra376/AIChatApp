@@ -4,6 +4,7 @@ import { getCharacterById, incrementCharacterActivity } from "../../db/queries/c
 import {
   claimConversationRun,
   deleteMessagesAfter,
+  finishStoppedConversationRun,
   getConversationById,
   getConversationSummaryById,
   getMessageById,
@@ -17,6 +18,7 @@ import {
   updateMessageSelection,
   updateRegenerationContent
 } from "../../db/queries/conversations";
+import type { StoppedReplySnapshot } from "../../db/queries/conversations";
 import { AppError, forbidden } from "../../lib/errors";
 import { createId } from "../../lib/ids";
 import { streamChatText } from "../../providers/openrouter";
@@ -462,11 +464,12 @@ export async function selectRegeneration(context: RequestContext, messageId: str
   scheduleCharacterMemoryConsolidation(context, message.conversation_id, message.position);
 }
 
-export async function cancelAssistantRun(context: RequestContext, conversationId: string, runId: string) {
+export async function cancelAssistantRun(context: RequestContext, conversationId: string, runId: string, partial?: StoppedReplySnapshot) {
   await requireOwnedConversation(context, conversationId);
   // Match the exact run so delayed stop requests cannot cancel a newer reply.
   // Assistant writes are fenced by this same lease in their INSERT statement.
-  await releaseConversationRun(context.env, conversationId, runId);
+  await finishStoppedConversationRun(context.env, conversationId, runId,
+    partial ? { ...partial, text: formatRoleplayMessage(partial.text) } : undefined);
 }
 
 export async function continueAssistantAndStream(context: RequestContext, conversationId: string): Promise<Response> {
@@ -478,7 +481,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
   try {
     const { character, transcript, messages } = await buildAssistantContext(context, conversationId);
     const continuationMessages = messagesForContinuation(messages, transcript.at(-1)?.role);
-    const assistantMessageId = createId("message");
+    const assistantMessageId = `message_${runId}`;
     const assistantPosition = (transcript.at(-1)?.position ?? -1) + 1;
     const linkedAbort = createLinkedAbortController(context.request.signal);
     const abortController = linkedAbort.abortController;
@@ -637,7 +640,7 @@ export async function sendMessageAndStream(
     const { conversation, character, transcript, messages } = await buildAssistantContext(context, conversationId, {
       appendedUserContent: content
     });
-    const assistantMessageId = createId("message");
+    const assistantMessageId = `message_${runId}`;
     const userNow = Date.now();
     const userPosition = (transcript.at(-1)?.position ?? -1) + 1;
     const userMessage = {
@@ -826,7 +829,7 @@ export async function regenerateLatestAssistantAndStream(
     const { conversation, messages } = await buildAssistantContext(context, message.conversation_id, {
       untilPosition: latest.position
     });
-    const regenerationId = createId("regen");
+    const regenerationId = `regen_${runId}`;
     const linkedAbort = createLinkedAbortController(context.request.signal);
     const abortController = linkedAbort.abortController;
     unlinkRequestAbort = linkedAbort.unlink;

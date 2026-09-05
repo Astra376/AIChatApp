@@ -236,4 +236,7 @@ data class CursorPageDto<T>(
 )
 
 @Serializable
-data class StopChatRequestDto(val runId: String)
+data class StopChatRequestDto(val runId: String, val partialReply: StoppedReplyDto? = null)
+
+@Serializable
+data class StoppedReplyDto(val messageId: String, val text: String, val regenerate: Boolean = false)

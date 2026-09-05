@@ -79,8 +79,10 @@ jobs:
           If Android reports an incompatible signature, keep your installed app; do not uninstall it and lose local data.
           Cloudflare backend changes require a separate deployment; the build logs show whether deployment credentials were available.
           NOTES
+          printf '\nVersion: 1.1.%s · source commit: %s\n' "$GITHUB_RUN_NUMBER" "$GITHUB_SHA" >> /tmp/preview-notes.md
           if gh release view mobile-preview > /dev/null 2>&1; then
             gh release upload mobile-preview Meek.apk Meek.apk.sha256 --clobber
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/mobile-preview" -f sha="$GITHUB_SHA" -F force=true > /dev/null
             gh release edit mobile-preview --notes-file /tmp/preview-notes.md
           else
             gh release create mobile-preview Meek.apk Meek.apk.sha256 --target "$GITHUB_SHA" --title 'Meek phone preview' --prerelease --notes-file /tmp/preview-notes.md

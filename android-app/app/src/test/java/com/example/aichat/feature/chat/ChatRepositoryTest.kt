@@ -48,6 +48,7 @@ class ChatRepositoryTest {
     private lateinit var characterDao: CharacterDao
     private lateinit var messageDao: MessageDao
     private lateinit var streamingClient: FakeStreamingClient
+    private lateinit var chatApi: FakeChatApi
     private lateinit var conversationApi: FakeConversationApi
     private lateinit var repository: ChatRepository
 
@@ -62,6 +63,7 @@ class ChatRepositoryTest {
         messageDao = database.messageDao()
         streamingClient = FakeStreamingClient()
         conversationApi = FakeConversationApi()
+        chatApi = FakeChatApi()
         repository = ChatRepository(
             database = database,
             conversationDao = conversationDao,
@@ -69,7 +71,7 @@ class ChatRepositoryTest {
             conversationSceneDao = database.conversationSceneDao(),
             messageDao = messageDao,
             regenerationDao = database.assistantRegenerationDao(),
-            chatApi = FakeChatApi(),
+            chatApi = chatApi,
             conversationApi = conversationApi,
             streamingClient = streamingClient
         )
@@ -191,6 +193,11 @@ class ChatRepositoryTest {
             .isEqualTo(ActiveStreamStatus.STOPPING)
 
         repository.reconcileStoppedStream(CONVERSATION_ID, stream.draftKey).getOrThrow()
+
+        assertThat(chatApi.stoppedReplies.single().runId).isEqualTo("run-1")
+        assertThat(chatApi.stoppedReplies.single().partialReply?.text).isEqualTo("partial reply")
+        assertThat(chatApi.stoppedReplies.single().partialReply?.messageId).isEqualTo("assistant-1")
+        assertThat(chatApi.stoppedReplies.single().partialReply?.regenerate).isFalse()
 
         val messages = messageDao.getMessages(CONVERSATION_ID)
         assertThat(messages.map { it.id }).containsExactly(pendingMessage.id, "assistant-1").inOrder()
@@ -782,7 +789,10 @@ class ChatRepositoryTest {
     )
 
     private class FakeChatApi : ChatApi {
-        override suspend fun stopReply(conversationId: String, body: com.example.aichat.core.network.StopChatRequestDto) {}
+        val stoppedReplies = mutableListOf<com.example.aichat.core.network.StopChatRequestDto>()
+        override suspend fun stopReply(conversationId: String, body: com.example.aichat.core.network.StopChatRequestDto) {
+            stoppedReplies += body
+        }
         override suspend fun editMessage(messageId: String, body: EditMessageRequestDto) = Unit
 
         override suspend fun rewind(messageId: String) = Unit

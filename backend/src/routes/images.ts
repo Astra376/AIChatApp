@@ -9,8 +9,11 @@ export const imageRoutes: RouteDefinition[] = [
     path: "/v1/images/generate-character-portrait",
     auth: true,
     handler: async (context) => {
-      const body = await parseJson<{ prompt?: string }>(context.request);
-      return json(await generateCharacterPortrait(context, requireString(body.prompt, "prompt", 2_000)));
+      const body = await parseJson<{ prompt?: string; preview?: boolean; sourceAvatarUrl?: string }>(context.request);
+      return json(await generateCharacterPortrait(
+        context, requireString(body.prompt, "prompt", 2_000), body.preview === true,
+        optionalString(body.sourceAvatarUrl, "sourceAvatarUrl", 2_000)
+      ));
     }
   },
   {

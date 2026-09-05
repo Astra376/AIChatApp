@@ -1,0 +1,108 @@
+name: Phone preview
+on:
+  push:
+    branches: [main, fix/mobile-chat-reliability]
+    paths: ['android-app/**', 'backend/**', '.github/workflows/mobile-preview.yml']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: phone-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - name: Validate Worker bundle
+        run: npx wrangler deploy --dry-run --outdir dist
+  android:
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Test and build phone APK
+        working-directory: android-app
+        run: >-
+          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleDebug
+          -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
+          -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
+      - name: Keep test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: android-app/app/build/reports/tests/
+      - name: Keep APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: meek-apk
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish phone download
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk Meek.apk
+          sha256sum Meek.apk > Meek.apk.sha256
+          cat > /tmp/preview-notes.md <<'NOTES'
+          Open Meek.apk on your Android phone and choose Update.
+          This development build uses the repository's existing shared debug certificate.
+          If Android reports an incompatible signature, keep your installed app; do not uninstall it and lose local data.
+          Cloudflare backend changes require a separate deployment; the build logs show whether deployment credentials were available.
+          NOTES
+          if gh release view mobile-preview > /dev/null 2>&1; then
+            gh release upload mobile-preview Meek.apk Meek.apk.sha256 --clobber
+            gh release edit mobile-preview --notes-file /tmp/preview-notes.md
+          else
+            gh release create mobile-preview Meek.apk Meek.apk.sha256 --target "$GITHUB_SHA" --title 'Meek phone preview' --prerelease --notes-file /tmp/preview-notes.md
+          fi
+  deploy-backend:
+    needs: android
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deploy existing Worker if credentials are configured
+        working-directory: backend
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'Backend not deployed: add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in repository Actions secrets.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          npm ci
+          npx wrangler deploy
+          echo 'Backend deployed successfully.' >> "$GITHUB_STEP_SUMMARY"

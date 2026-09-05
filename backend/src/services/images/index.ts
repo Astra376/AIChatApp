@@ -1,17 +1,31 @@
 import type { RequestContext } from "../../env";
 import { publicAssetUrl } from "../../lib/assets";
+import { AppError } from "../../lib/errors";
 import { createId } from "../../lib/ids";
 import { generateChatBackgroundWithFal, generatePortraitWithFal } from "../../providers/fal";
 import { storeRemoteImageInR2 } from "../../providers/r2";
 
-export async function generateCharacterPortrait(context: RequestContext, prompt: string) {
+export async function generateCharacterPortrait(
+  context: RequestContext, prompt: string, preview = false, sourceAvatarUrl: string | null = null
+) {
+  if (sourceAvatarUrl) {
+    const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/`);
+    const filename = sourceAvatarUrl.startsWith(prefix) ? sourceAvatarUrl.slice(prefix.length) : "";
+    if (!/^[a-zA-Z0-9_-]+\.jpg$/.test(filename)
+      || !await context.env.ASSETS.head(`portraits/${context.user!.userId}/${filename}`)) {
+      throw new AppError(400, "INVALID_PORTRAIT", "Choose one of your generated portraits first.");
+    }
+  }
   const remoteUrl = await generatePortraitWithFal(
     context.env,
     [
       "Square full-bleed character portrait that fills the entire image frame.",
       "Do not make a circular avatar, round crop, badge, medallion, border, or framed icon.",
+      sourceAvatarUrl ? "Enhance this exact portrait at full resolution. Preserve the same face, identity, pose, composition, clothing and style." : "",
       prompt
-    ].join("\n")
+    ].join("\n"),
+    preview,
+    sourceAvatarUrl ?? undefined
   );
   const key = `portraits/${context.user!.userId}/${createId("portrait")}.jpg`;
   const avatarUrl = await storeRemoteImageInR2(context.env, key, remoteUrl);

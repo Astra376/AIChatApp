@@ -208,11 +208,13 @@ class CharacterRepository @Inject constructor(
     private fun characterMutex(characterId: String): Mutex =
         characterMutationMutexes.computeIfAbsent(characterId) { Mutex() }
 
-    suspend fun generatePortrait(seedSource: String): Result<String> {
+    suspend fun generatePortrait(seedSource: String, preview: Boolean = false, sourceAvatarUrl: String? = null): Result<String> {
         if (seedSource.isBlank()) return Result.failure(IllegalArgumentException("Add a name or prompt first."))
-        return runCatching {
-            imageApi.generatePortrait(GeneratePortraitRequestDto(seedSource.trim())).avatarUrl
-        }
+        return try {
+            Result.success(imageApi.generatePortrait(GeneratePortraitRequestDto(seedSource.trim().take(2_000), preview, sourceAvatarUrl)).avatarUrl)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) { Result.failure(error) }
     }
 
     suspend fun generateGreeting(name: String, description: String): Result<String> {

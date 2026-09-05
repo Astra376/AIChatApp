@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { AppError } from "../lib/errors";
+import { RequestDeadline } from "../lib/deadline";
 
 interface FalQueueResponse {
   request_id?: string;
@@ -26,9 +27,11 @@ interface FalErrorDetails {
 }
 
 const FAL_QUEUE_ORIGIN = "https://queue.fal.run";
-const FAL_STATUS_ATTEMPTS = 40;
-const FAL_STATUS_POLL_INTERVAL_MS = 2_500;
-const FAL_FETCH_BUDGET = 48;
+const FAL_STATUS_ATTEMPTS = 30;
+const FAL_STATUS_POLL_INTERVAL_MS = 4_000;
+// Leave room for authentication, R2 lookups and four image-download retries
+// under the Workers free-plan subrequest limit.
+const FAL_FETCH_BUDGET = 36;
 const FAL_RESULT_FETCH_RESERVE = 4;
 const FAL_GET_ATTEMPTS = 4;
 const FAL_RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
@@ -123,13 +126,14 @@ async function fetchFal(
     attempts: number;
     stage: "queue" | "status" | "result";
     requestId?: string;
+    deadline: RequestDeadline;
   }
 ): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < input.attempts; attempt += 1) {
     input.budget.consume();
     try {
-      const response = await fetch(url, init);
+      const response = await input.deadline.run(fetch(url, { ...init, signal: input.deadline.signal }));
       if (!FAL_RETRYABLE_STATUSES.has(response.status) || attempt === input.attempts - 1) {
         return response;
       }
@@ -141,6 +145,7 @@ async function fetchFal(
       });
       await response.body?.cancel();
     } catch (error) {
+      if (input.deadline.signal.aborted) throw new AppError(504, "FAL_TIMEOUT", "Image generation timed out. Please try again.");
       lastError = error;
       if (attempt === input.attempts - 1) {
         console.warn("Fal request failed before receiving a response", {
@@ -151,7 +156,7 @@ async function fetchFal(
         throw new AppError(502, `FAL_${input.stage.toUpperCase()}_ERROR`, "Image generation provider could not be reached.");
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt));
+    await input.deadline.run(new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt)));
   }
   throw lastError;
 }
@@ -189,10 +194,13 @@ function validatedFalRequestUrl(
     throw new AppError(502, errorCode, "Image generation provider returned an invalid tracking URL.");
   }
 
-  const expectedPath = new URL(fallback).pathname;
+  // Some queue routes track requests at the parent model (without /edit),
+  // and providers may add/remove /response between status responses.
+  const expectedPath = new URL(fallback).pathname.replace(/\/response$/, "");
+  const parentPath = expectedPath.replace(/(\/[^/]+\/[^/]+)\/[^/]+(\/requests\/)/, "$1$2");
   const validPath = operation === "status"
-    ? parsed.pathname === expectedPath
-    : parsed.pathname === expectedPath || parsed.pathname === `${expectedPath}/response`;
+    ? parsed.pathname === expectedPath || parsed.pathname === parentPath
+    : [expectedPath, `${expectedPath}/response`, parentPath, `${parentPath}/response`].includes(parsed.pathname);
   if (
     parsed.origin !== FAL_QUEUE_ORIGIN
     || parsed.username
@@ -217,11 +225,13 @@ function requireGeneratedImageUrl(value: unknown): string {
   }
 }
 
-export async function generatePortraitWithFal(env: Env, prompt: string): Promise<string> {
+export async function generatePortraitWithFal(env: Env, prompt: string, preview = false, referenceImageUrl?: string): Promise<string> {
   return generateImageWithFal(env, {
-    model: env.FAL_MODEL,
+    model: referenceImageUrl ? `${env.FAL_MODEL.replace(/\/edit$/, "")}/edit` : env.FAL_MODEL,
     prompt,
-    aspectRatio: "1:1"
+    aspectRatio: "1:1",
+    resolution: preview ? "0.5K" : "1K",
+    referenceImageUrl
   });
 }
 
@@ -229,7 +239,8 @@ export async function generateChatBackgroundWithFal(env: Env, prompt: string): P
   return generateImageWithFal(env, {
     model: env.FAL_BACKGROUND_MODEL || env.FAL_MODEL,
     prompt,
-    aspectRatio: "16:9"
+    aspectRatio: "16:9",
+    resolution: "1K"
   });
 }
 
@@ -239,10 +250,14 @@ async function generateImageWithFal(
     model: string;
     prompt: string;
     aspectRatio: "1:1" | "16:9";
+    resolution: "0.5K" | "1K";
+    referenceImageUrl?: string;
   }
 ): Promise<string> {
   const configuration = requireFalConfiguration(env, options.model);
   const budget = new FalFetchBudget();
+  const deadline = new RequestDeadline(140_000, 140_000);
+  try {
   const queueResponse = await fetchFal(`${FAL_QUEUE_ORIGIN}/${configuration.model}`, {
     method: "POST",
     headers: {
@@ -253,10 +268,13 @@ async function generateImageWithFal(
       prompt: options.prompt,
       aspect_ratio: options.aspectRatio,
       output_format: "jpeg",
-      num_images: 1
+      num_images: 1,
+      resolution: options.resolution,
+      ...(options.referenceImageUrl ? { image_urls: [options.referenceImageUrl] } : {})
     })
   }, {
     budget,
+    deadline,
     attempts: 1,
     stage: "queue"
   });
@@ -269,11 +287,11 @@ async function generateImageWithFal(
     });
   }
 
-  const queued = await parseFalResponse<FalQueueResponse>(queueResponse, {
+  const queued = await deadline.run(parseFalResponse<FalQueueResponse>(queueResponse, {
     stage: "queue",
     code: "FAL_QUEUE_ERROR",
     message: "Image generation returned an invalid queue response."
-  });
+  }));
   if (typeof queued?.request_id !== "string" || !queued.request_id.trim() || queued.request_id.length > 200) {
     throw new AppError(502, "FAL_QUEUE_ERROR", "Image generation did not return a request id.");
   }
@@ -302,6 +320,7 @@ async function generateImageWithFal(
       }
     }, {
       budget,
+    deadline,
       attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining - FAL_RESULT_FETCH_RESERVE),
       stage: "status",
       requestId: queued.request_id
@@ -316,12 +335,12 @@ async function generateImageWithFal(
       });
     }
 
-    const status = await parseFalResponse<FalStatusResponse>(statusResponse, {
+    const status = await deadline.run(parseFalResponse<FalStatusResponse>(statusResponse, {
       stage: "status",
       code: "FAL_STATUS_ERROR",
       message: "Image generation returned an invalid status response.",
       requestId: queued.request_id
-    });
+    }));
     if (status.status === "FAILED") {
       console.warn("Fal generation failed", {
         requestId: queued.request_id,
@@ -355,6 +374,7 @@ async function generateImageWithFal(
         },
         {
           budget,
+    deadline,
           attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining),
           stage: "result",
           requestId: queued.request_id
@@ -368,20 +388,23 @@ async function generateImageWithFal(
           requestId: queued.request_id
         });
       }
-      const result = await parseFalResponse<FalResultResponse>(resultResponse, {
+      const result = await deadline.run(parseFalResponse<FalResultResponse>(resultResponse, {
         stage: "result",
         code: "FAL_RESULT_ERROR",
         message: "Image generation returned an invalid result response.",
         requestId: queued.request_id
-      });
+      }));
       return requireGeneratedImageUrl(result.images?.[0]?.url);
     }
 
     if (status.status !== "IN_QUEUE" && status.status !== "IN_PROGRESS") {
       throw new AppError(502, "FAL_STATUS_ERROR", "Image generation returned an invalid status.");
     }
-    await new Promise((resolve) => setTimeout(resolve, FAL_STATUS_POLL_INTERVAL_MS));
+    await deadline.run(new Promise((resolve) => setTimeout(resolve, FAL_STATUS_POLL_INTERVAL_MS)));
   }
 
   throw new AppError(504, "FAL_TIMEOUT", "Image generation timed out.");
+  } finally {
+    deadline.dispose();
+  }
 }

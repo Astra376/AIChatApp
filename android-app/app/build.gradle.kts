@@ -16,8 +16,9 @@ android {
         applicationId = "com.example.aichat"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("AI_CHAT_VERSION_CODE").orElse("2").get().toInt()
+        versionName = providers.gradleProperty("AI_CHAT_VERSION_NAME").orElse("1.1.0").get()
+        buildConfigField("String", "BUILD_SHA", "\"${providers.gradleProperty("AI_CHAT_BUILD_SHA").orElse("local").get()}\"")
 
         testInstrumentationRunner = "com.example.aichat.HiltTestRunner"
 

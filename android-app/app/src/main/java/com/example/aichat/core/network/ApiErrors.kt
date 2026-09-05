@@ -27,6 +27,9 @@ fun Throwable.userFacingMessage(fallback: String): String {
         return httpStatusMessage(httpError.code(), fallback)
     }
 
+    if (causes.any { it is kotlinx.serialization.SerializationException || it.message?.contains("stream", ignoreCase = true) == true && it.message?.contains("terminal", ignoreCase = true) == true }) {
+        return "The reply was interrupted. Please retry."
+    }
     if (causes.any { it is SocketTimeoutException }) {
         return "The request timed out. Check your connection and retry."
     }
@@ -43,6 +46,7 @@ fun Throwable.userFacingMessage(fallback: String): String {
 
 fun httpStatusMessage(statusCode: Int, fallback: String): String = when (statusCode) {
     401 -> "Your session expired. Sign in again and retry."
+    409 -> "A reply is still finishing. Stop it or try again shortly."
     408, 504 -> "The request timed out. Check your connection and retry."
     429 -> "The service is busy right now. Please retry in a moment."
     in 500..599 -> "The service is temporarily unavailable. Please try again."

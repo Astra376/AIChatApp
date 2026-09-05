@@ -88,6 +88,11 @@ class WorkerStreamingClient private constructor(
         baseUrl: HttpUrl
     ) : this(okHttpClient, json, baseUrl.toString())
 
+    private val streamingHttpClient = okHttpClient.newBuilder()
+        .readTimeout(55, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(125, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
     private val jsonMediaType = "application/json".toMediaType()
     private val baseUrl = if (configuredBaseUrl.endsWith("/")) {
         configuredBaseUrl
@@ -124,7 +129,7 @@ class WorkerStreamingClient private constructor(
     }
 
     private fun stream(request: Request, expectedStream: ExpectedStream): Flow<ChatStreamEvent> = callbackFlow {
-        val call = okHttpClient.newCall(request)
+        val call = streamingHttpClient.newCall(request)
         val readerJob = launch(Dispatchers.IO) {
             val response = try {
                 call.execute()
@@ -170,6 +175,8 @@ class WorkerStreamingClient private constructor(
                         )
                         terminalReceived = event.isTerminal
                         send(event)
+                        // Terminal events finish the operation even if the server keeps its socket open.
+                        if (terminalReceived) break
                     }
                     check(terminalReceived) {
                         "The chat stream ended before a terminal event was received."

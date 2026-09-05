@@ -767,6 +767,7 @@ class ChatRepositoryTest {
     )
 
     private class FakeChatApi : ChatApi {
+        override suspend fun stopReply(conversationId: String, body: com.example.aichat.core.network.StopChatRequestDto) {}
         override suspend fun editMessage(messageId: String, body: EditMessageRequestDto) = Unit
 
         override suspend fun rewind(messageId: String) = Unit

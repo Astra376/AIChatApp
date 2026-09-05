@@ -148,6 +148,8 @@ class ChatRepository @Inject constructor(
 
     suspend fun reconcileStoppedStream(conversationId: String, draftKey: String): Result<Unit> =
         withContext(Dispatchers.IO) {
+            try {
+                kotlinx.coroutines.withTimeout(12_000) {
             captureResult {
                 STOP_RECONCILIATION_DELAYS_MS.forEachIndexed { attempt, delayMillis ->
                     if (delayMillis > 0L) delay(delayMillis)
@@ -188,6 +190,14 @@ class ChatRepository @Inject constructor(
                 }
                 updateActiveStream(conversationId, draftKey) { stream ->
                     stream.copy(status = ActiveStreamStatus.STOPPED)
+                }
+            }
+                }
+            } finally {
+                val stream = currentActiveStream(conversationId)
+                if (stream?.draftKey == draftKey && stream.status == ActiveStreamStatus.STOPPING) {
+                    if (stream.text.isBlank()) clearActiveStream(conversationId, draftKey)
+                    else updateActiveStream(conversationId, draftKey) { it.copy(status = ActiveStreamStatus.STOPPED) }
                 }
             }
         }
@@ -480,6 +490,14 @@ class ChatRepository @Inject constructor(
                 cause = error
             )
         } finally {
+            if (!terminalReceived && acceptedRunId != null) {
+                // Recover the server lease independently of socket cancellation.
+                withContext(NonCancellable) {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        runCatching { chatApi.stopReply(conversationId, com.example.aichat.core.network.StopChatRequestDto(acceptedRunId!!)) }
+                    }
+                }
+            }
             if (!stopped) {
                 clearActiveStream(conversationId, draftKey)
             }
@@ -590,6 +608,14 @@ class ChatRepository @Inject constructor(
             clearStopRequest(draftKey)
             throw error
         } finally {
+            if (!terminalReceived && acceptedRunId != null) {
+                // Recover the server lease independently of socket cancellation.
+                withContext(NonCancellable) {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        runCatching { chatApi.stopReply(conversationId, com.example.aichat.core.network.StopChatRequestDto(acceptedRunId!!)) }
+                    }
+                }
+            }
             if (!stopped) {
                 clearActiveStream(conversationId, draftKey)
             }
@@ -695,6 +721,14 @@ class ChatRepository @Inject constructor(
             clearStopRequest(draftKey)
             throw error
         } finally {
+            if (!terminalReceived && acceptedRunId != null) {
+                // Recover the server lease independently of socket cancellation.
+                withContext(NonCancellable) {
+                    kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        runCatching { chatApi.stopReply(conversationId, com.example.aichat.core.network.StopChatRequestDto(acceptedRunId!!)) }
+                    }
+                }
+            }
             if (!stopped) {
                 clearActiveStream(conversationId, draftKey)
             }

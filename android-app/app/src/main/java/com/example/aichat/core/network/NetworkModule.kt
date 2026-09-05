@@ -31,7 +31,8 @@ object NetworkModule {
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(sessionRefreshingInterceptor)
             .addInterceptor(
@@ -83,5 +84,10 @@ object NetworkModule {
     ): ChatStreamingClient = WorkerStreamingClient(okHttpClient, json)
 
     @Provides
-    fun provideImageApi(retrofit: Retrofit): ImageApi = retrofit.create(ImageApi::class.java)
+    fun provideImageApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ImageApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder()
+            .readTimeout(170, TimeUnit.SECONDS)
+            .callTimeout(175, TimeUnit.SECONDS)
+            .build())
+        .build().create(ImageApi::class.java)
 }

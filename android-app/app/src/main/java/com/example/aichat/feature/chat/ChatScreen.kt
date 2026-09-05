@@ -105,6 +105,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -149,21 +150,25 @@ class ChatViewModel @Inject constructor(
     private val authRepository: AuthRepository
 ) : ViewModel() {
     private val conversationId: String = checkNotNull(savedStateHandle["conversationId"])
-    private val composerText = MutableStateFlow("")
+    private val composerText = MutableStateFlow(savedStateHandle.get<String>("composerDraft").orEmpty())
+    private val composerSavedState = savedStateHandle
+    var editorText by mutableStateOf(composerText.value)
+        private set
     private val isStartingNewChat = MutableStateFlow(false)
     private val loadedMessageLimit = MutableStateFlow(CHAT_MESSAGE_PAGE_SIZE)
     private val _events = MutableSharedFlow<String>()
     private var activeStreamJob: Job? = null
     private var backgroundRepairAttempted = false
+    private var lastBackgroundAttemptAt = 0L
     val events = _events.asSharedFlow()
 
     init {
         viewModelScope.launch {
             chatRepository.refreshConversation(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't load conversation.")) }
-            chatBackgroundRepository.ensureInitialBackground(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't generate background scene.")) }
+                .onFailure { if (uiState.value.conversation == null) _events.emit(it.userFacingMessage("Couldn't load conversation.")) }
             conversationRepository.markConversationRead(conversationId)
+            chatBackgroundRepository.ensureInitialBackground(conversationId)
+                .onFailure { android.util.Log.w("ChatBackground", "Initial background unavailable", it) }
         }
     }
 
@@ -194,7 +199,9 @@ class ChatViewModel @Inject constructor(
     )
 
     fun onComposerChanged(value: String) {
+        editorText = value
         composerText.value = value
+        composerSavedState["composerDraft"] = value
     }
 
     fun loadOlderMessages() {
@@ -205,13 +212,14 @@ class ChatViewModel @Inject constructor(
         if (activeStreamJob?.isActive == true || uiState.value.isStreamBusy) return
         val text = composerText.value.trim()
         if (text.isBlank()) return
-        composerText.value = ""
+        onComposerChanged("")
         launchStreamingAction {
             chatRepository.sendMessage(conversationId, text)
                 .onFailure { error ->
+                    viewModelScope.launch { chatRepository.refreshConversation(conversationId) }
                     val shouldRestoreComposer = error !is SendMessageFailedException || !error.accepted
                     if (shouldRestoreComposer && composerText.value.isBlank()) {
-                        composerText.value = text
+                        onComposerChanged(text)
                     }
                     val message = error.userFacingMessage("Message send failed.")
                     _events.emit(
@@ -299,7 +307,7 @@ class ChatViewModel @Inject constructor(
         backgroundRepairAttempted = true
         viewModelScope.launch {
             chatBackgroundRepository.repairFailedBackground(conversationId, failedImageUrl)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't repair the background scene.")) }
+                .onFailure { android.util.Log.w("ChatBackground", "Background repair unavailable", it) }
         }
     }
 
@@ -346,9 +354,12 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun refreshBackgroundAfterStream() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastBackgroundAttemptAt < 60_000) return
+        lastBackgroundAttemptAt = now
         viewModelScope.launch {
             chatBackgroundRepository.refreshIfSceneChanged(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Background scene update failed.")) }
+                .onFailure { android.util.Log.w("ChatBackground", "Background update unavailable", it) }
         }
     }
 
@@ -380,7 +391,12 @@ fun ChatRoute(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.events.collect { snackbarHostState.showSnackbar(it) }
+        viewModel.events.collectLatest { message ->
+            if (snackbarHostState.currentSnackbarData?.visuals?.message != message) {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                snackbarHostState.showSnackbar(message, withDismissAction = true)
+            }
+        }
     }
 
     LaunchedEffect(state.isStreamBusy) {
@@ -394,7 +410,7 @@ fun ChatRoute(
         paddingValues = paddingValues,
         onBack = onBack,
         onOpenMemory = onOpenMemory,
-        state = state,
+        state = state.copy(composerText = viewModel.editorText),
         snackbarHostState = snackbarHostState,
         onComposerChanged = viewModel::onComposerChanged,
         onSend = viewModel::send,
@@ -1076,7 +1092,7 @@ private fun ChatHeader(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .clickable(enabled = !isLoading, onClick = onOpenDetails)
+                    .clickable(enabled = !isLoading, onClickLabel = "Open character menu", onClick = onOpenDetails)
                     .padding(
                         horizontal = AppChrome.screenHorizontalPadding,
                         vertical = AppChrome.compactHeaderVerticalPadding
@@ -1109,6 +1125,13 @@ private fun ChatHeader(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
+                }
+                IconCircleButton(
+                    enabled = !isLoading,
+                    containerSize = AppChrome.compactControlSize,
+                    onClick = onOpenDetails
+                ) {
+                    AppIcon(AppIcons.settings, contentDescription = "Character menu", size = AppChrome.headerActionIconSize)
                 }
                 IconCircleButton(
                     enabled = !isLoading,
@@ -1551,40 +1574,11 @@ private fun ChatMessage.variantIdAt(index: Int): String {
 private fun ChatMessage.variantTexts(): List<String> = listOf(content) + regenerations.map { it.content }
 
 @Composable
-private fun roleplayAnnotatedText(value: String) = buildAnnotatedString {
-    var index = 0
-    while (index < value.length) {
-        val triple = value.indexOf("***", index)
-        val double = value.indexOf("**", index).let { if (it >= 0 && it != triple) it else -1 }
-        val single = value.indexOf("*", index).let { if (it >= 0 && it != triple && it != double) it else -1 }
-        val next = listOf(triple, double, single).filter { it >= 0 }.minOrNull() ?: -1
-        if (next == -1) {
-            append(value.substring(index))
-            break
-        }
-        append(value.substring(index, next))
-        val marker = when (next) {
-            triple -> "***"
-            double -> "**"
-            else -> "*"
-        }
-        val end = value.indexOf(marker, next + marker.length)
-        if (end == -1) {
-            append(marker)
-            index = next + marker.length
-            continue
-        }
-        val style = when (marker) {
-            "***" -> SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
-            "**" -> SpanStyle(fontWeight = FontWeight.Bold)
-            else -> SpanStyle(fontStyle = FontStyle.Italic)
-        }
-        pushStyle(style)
-        append(value.substring(next + marker.length, end))
-        pop()
-        index = end + marker.length
-    }
-}
+private fun roleplayAnnotatedText(value: String) = formatRoleplayText(
+    value,
+    narrationColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    speechColor = MaterialTheme.colorScheme.onSurface
+)
 
 @Composable
 private fun TypingDotsIndicator(modifier: Modifier = Modifier) {

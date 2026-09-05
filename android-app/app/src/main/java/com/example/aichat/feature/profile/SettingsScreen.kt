@@ -116,6 +116,11 @@ fun SettingsRoute(
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = "Meek ${com.example.aichat.BuildConfig.VERSION_NAME} · ${com.example.aichat.BuildConfig.BUILD_SHA}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             SecondaryButton(
                 text = "Log Out",
                 modifier = Modifier.fillMaxWidth(),

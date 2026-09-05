@@ -1,3 +1,4 @@
+import { AppError } from "../../lib/errors";
 import type { Env } from "../../env";
 import { all, first, run } from "../client";
 
@@ -198,14 +199,16 @@ export async function getMessageById(env: Env, messageId: string): Promise<Messa
   );
 }
 
-export async function insertMessage(env: Env, input: MessageRecord): Promise<void> {
-  await run(
+export async function insertMessage(env: Env, input: MessageRecord, runId?: string): Promise<void> {
+  const result = await run(
     env.DB.prepare(
       `
       INSERT INTO messages (
         id, conversation_id, position, role, content, edited, created_at, updated_at, selected_regeneration_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ${runId ? `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM conversations WHERE id = ? AND active_run_id = ? AND active_run_expires_at > ?
+      )` : "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"}
       `
     ).bind(
       input.id,
@@ -216,9 +219,11 @@ export async function insertMessage(env: Env, input: MessageRecord): Promise<voi
       input.edited,
       input.created_at,
       input.updated_at,
-      input.selected_regeneration_id
+      input.selected_regeneration_id,
+      ...(runId ? [input.conversation_id, runId, Date.now()] : [])
     )
   );
+  if (runId && Number(result.meta.changes) === 0) throw new AppError(409, "RUN_CANCELLED", "The reply was stopped.");
 }
 
 export async function updateMessageContent(env: Env, input: {
@@ -243,15 +248,17 @@ export async function updateMessageSelection(env: Env, input: {
   selectedRegenerationId: string | null;
   updatedAt: number;
   edited?: boolean;
-}): Promise<void> {
+}, runId?: string): Promise<void> {
   await run(
     env.DB.prepare(
       `
       UPDATE messages
       SET selected_regeneration_id = ?, updated_at = ?, edited = COALESCE(?, edited)
       WHERE id = ?
+      ${runId ? `AND EXISTS (SELECT 1 FROM conversations WHERE conversations.id = messages.conversation_id
+        AND active_run_id = ? AND active_run_expires_at > ?)` : ""}
       `
-    ).bind(input.selectedRegenerationId, input.updatedAt, input.edited == null ? null : input.edited ? 1 : 0, input.messageId)
+    ).bind(input.selectedRegenerationId, input.updatedAt, input.edited == null ? null : input.edited ? 1 : 0, input.messageId, ...(runId ? [runId, Date.now()] : []))
   );
 }
 
@@ -263,15 +270,19 @@ export async function deleteMessagesAfter(env: Env, conversationId: string, posi
   );
 }
 
-export async function insertRegeneration(env: Env, input: AssistantRegenerationRecord): Promise<void> {
-  await run(
+export async function insertRegeneration(env: Env, input: AssistantRegenerationRecord, runId?: string): Promise<void> {
+  const result = await run(
     env.DB.prepare(
       `
       INSERT INTO assistant_regenerations (id, message_id, content, created_at)
-      VALUES (?, ?, ?, ?)
+      ${runId ? `SELECT ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM conversations JOIN messages ON messages.conversation_id = conversations.id
+        WHERE messages.id = ? AND active_run_id = ? AND active_run_expires_at > ?
+      )` : "VALUES (?, ?, ?, ?)"}
       `
-    ).bind(input.id, input.message_id, input.content, input.created_at)
+    ).bind(input.id, input.message_id, input.content, input.created_at, ...(runId ? [input.message_id, runId, Date.now()] : []))
   );
+  if (runId && Number(result.meta.changes) === 0) throw new AppError(409, "RUN_CANCELLED", "The reply was stopped.");
 }
 
 export async function updateRegenerationContent(env: Env, regenerationId: string, content: string): Promise<void> {

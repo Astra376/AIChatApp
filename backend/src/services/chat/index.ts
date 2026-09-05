@@ -28,9 +28,9 @@ import {
 } from "./memory";
 import { formatRoleplayMessage } from "./formatRoleplay";
 
-// Keep the server-side lease beyond the Android client's 180-second read
-// timeout so a slow, still-running provider request cannot be claimed twice.
-const RUN_LOCK_WINDOW_MS = 4 * 60 * 1000;
+// Provider attempts are bounded (25s idle, 90s total). Keep a final safety
+// lease beyond their maximum combined duration, rather than a four-minute lock.
+const RUN_LOCK_WINDOW_MS = 130_000;
 const MAX_MODEL_INPUT_CHARACTERS = 200_000;
 const MIN_RECENT_TRANSCRIPT_CHARACTERS = 16_000;
 
@@ -462,6 +462,13 @@ export async function selectRegeneration(context: RequestContext, messageId: str
   scheduleCharacterMemoryConsolidation(context, message.conversation_id, message.position);
 }
 
+export async function cancelAssistantRun(context: RequestContext, conversationId: string, runId: string) {
+  await requireOwnedConversation(context, conversationId);
+  // Match the exact run so delayed stop requests cannot cancel a newer reply.
+  // Assistant writes are fenced by this same lease in their INSERT statement.
+  await releaseConversationRun(context.env, conversationId, runId);
+}
+
 export async function continueAssistantAndStream(context: RequestContext, conversationId: string): Promise<Response> {
   const conversation = await requireOwnedConversation(context, conversationId);
   const runId = await acquireConversationRun(context, conversationId);
@@ -528,7 +535,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
             created_at: assistantMessage.createdAt,
             updated_at: assistantMessage.updatedAt,
             selected_regeneration_id: null
-          });
+          }, runId);
           await updateConversationActivity(context.env, conversationId, assistantNow);
           await incrementCharacterActivity(context.env, character.id, assistantNow);
 
@@ -549,7 +556,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
           scheduleCharacterMemoryConsolidation(context, conversationId);
           finalizationPhase = "settled";
         } catch (error) {
-          if (abortController.signal.aborted && finalizationPhase === "streaming") {
+          if (finalizationPhase === "streaming" && (abortController.signal.aborted || partialText.trim())) {
             finalizationPhase = "partial";
             const stoppedText = formatRoleplayMessage(partialText);
             if (stoppedText) {
@@ -564,13 +571,14 @@ export async function continueAssistantAndStream(context: RequestContext, conver
                 created_at: stoppedAt,
                 updated_at: stoppedAt,
                 selected_regeneration_id: null
-              });
+              }, runId);
               await updateConversationActivity(context.env, conversationId, stoppedAt);
               await incrementCharacterActivity(context.env, character.id, stoppedAt);
               scheduleCharacterMemoryConsolidation(context, conversationId);
             }
             finalizationPhase = "settled";
-          } else if (!abortController.signal.aborted) {
+          }
+          if (!abortController.signal.aborted) {
             leaseReleased = await releaseConversationRunBeforeTerminal(context, conversationId, runId);
             safeEnqueue(controller, {
               type: "failed",
@@ -654,7 +662,7 @@ export async function sendMessageAndStream(
       created_at: userMessage.createdAt,
       updated_at: userMessage.updatedAt,
       selected_regeneration_id: null
-    });
+    }, runId);
 
     const linkedAbort = createLinkedAbortController(context.request.signal);
     const abortController = linkedAbort.abortController;
@@ -711,7 +719,7 @@ export async function sendMessageAndStream(
             created_at: assistantMessage.createdAt,
             updated_at: assistantMessage.updatedAt,
             selected_regeneration_id: null
-          });
+          }, runId);
           await updateConversationActivity(context.env, conversationId, assistantNow);
           await incrementCharacterActivity(context.env, character.id, assistantNow);
 
@@ -732,7 +740,7 @@ export async function sendMessageAndStream(
           scheduleCharacterMemoryConsolidation(context, conversationId);
           finalizationPhase = "settled";
         } catch (error) {
-          if (abortController.signal.aborted && finalizationPhase === "streaming") {
+          if (finalizationPhase === "streaming" && (abortController.signal.aborted || partialText.trim())) {
             finalizationPhase = "partial";
             const stoppedText = formatRoleplayMessage(partialText);
             if (stoppedText) {
@@ -747,13 +755,14 @@ export async function sendMessageAndStream(
                 created_at: stoppedAt,
                 updated_at: stoppedAt,
                 selected_regeneration_id: null
-              });
+              }, runId);
               await updateConversationActivity(context.env, conversationId, stoppedAt);
               await incrementCharacterActivity(context.env, character.id, stoppedAt);
               scheduleCharacterMemoryConsolidation(context, conversationId);
             }
             finalizationPhase = "settled";
-          } else if (!abortController.signal.aborted) {
+          }
+          if (!abortController.signal.aborted) {
             leaseReleased = await releaseConversationRunBeforeTerminal(context, conversationId, runId);
             safeEnqueue(controller, {
               type: "failed",
@@ -864,12 +873,12 @@ export async function regenerateLatestAssistantAndStream(
             message_id: regeneration.messageId,
             content: regeneration.content,
             created_at: regeneration.createdAt
-          });
+          }, runId);
           await updateMessageSelection(context.env, {
             messageId: latest.id,
             selectedRegenerationId: regeneration.id,
             updatedAt: regenerationNow
-          });
+          }, runId);
           await updateConversationActivity(context.env, message.conversation_id, regenerationNow);
 
           const summary = await getConversationSummaryById(context.env, context.user!.userId, message.conversation_id);
@@ -904,7 +913,7 @@ export async function regenerateLatestAssistantAndStream(
           );
           finalizationPhase = "settled";
         } catch (error) {
-          if (abortController.signal.aborted && finalizationPhase === "streaming") {
+          if (finalizationPhase === "streaming" && (abortController.signal.aborted || partialText.trim())) {
             finalizationPhase = "partial";
             const stoppedText = formatRoleplayMessage(partialText);
             if (stoppedText) {
@@ -914,12 +923,12 @@ export async function regenerateLatestAssistantAndStream(
                 message_id: latest.id,
                 content: stoppedText,
                 created_at: stoppedAt
-              });
+              }, runId);
               await updateMessageSelection(context.env, {
                 messageId: latest.id,
                 selectedRegenerationId: regenerationId,
                 updatedAt: stoppedAt
-              });
+              }, runId);
               await updateConversationActivity(context.env, message.conversation_id, stoppedAt);
               scheduleCharacterMemoryConsolidation(
                 context,
@@ -928,7 +937,8 @@ export async function regenerateLatestAssistantAndStream(
               );
             }
             finalizationPhase = "settled";
-          } else if (!abortController.signal.aborted) {
+          }
+          if (!abortController.signal.aborted) {
             leaseReleased = await releaseConversationRunBeforeTerminal(
               context,
               message.conversation_id,

@@ -19,6 +19,7 @@ function streamFromText(text: string): ReadableStream<Uint8Array> {
 
 describe("streamChatText", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -68,10 +69,7 @@ describe("streamChatText", () => {
   });
 
   it("retries a transient provider response before streaming", async () => {
-    vi.stubGlobal("setTimeout", (callback: () => void) => {
-      callback();
-      return 0;
-    });
+    // Keep real provider deadlines; only retry backoff is short.
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(
@@ -91,5 +89,51 @@ describe("streamChatText", () => {
 
     expect(chunks).toEqual(["recovered"]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("stalled stream recovery", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it("finishes at DONE even if the provider never closes its socket", async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n'));
+      }, cancel
+    }))));
+    const chunks: string[] = [];
+    for await (const text of streamChatText(env, [{ role: "user", content: "hi" }])) chunks.push(text);
+    expect(chunks).toEqual(["hello"]);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("does not keep a lock alive on provider heartbeats without text", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(': heartbeat\n\n')); }, cancel
+    }))));
+    const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
+    const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
+    await vi.advanceTimersByTimeAsync(52_000);
+    await rejection;
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends a stalled partial reply without starting another model response", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')); }
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const chunks: string[] = [];
+    const operation = (async () => { for await (const text of streamChatText(env, [])) chunks.push(text); })();
+    const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
+    await vi.advanceTimersByTimeAsync(26_000);
+    await rejection;
+    expect(chunks).toEqual(["partial"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

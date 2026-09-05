@@ -31,6 +31,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -298,9 +304,20 @@ fun AppTextField(
 ) {
     val containerColor = controlSurfaceColor(selected = false)
     val alignTextToTop = !singleLine && minLines > 1
+    // Keep selection and IME composing text together. Feed keyboard edits back
+    // immediately rather than waiting for a ViewModel/Flow recomposition.
+    var editor by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(value)) }
+    var lastExternalValue by remember { mutableStateOf(value) }
+    if (value != lastExternalValue) {
+        lastExternalValue = value
+        if (value != editor.text) editor = TextFieldValue(value, androidx.compose.ui.text.TextRange(value.length))
+    }
     BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = editor,
+        onValueChange = { next ->
+            editor = next
+            onValueChange(next.text)
+        },
         modifier = modifier,
         enabled = enabled,
         keyboardOptions = keyboardOptions,
@@ -360,7 +377,7 @@ fun AppTextField(
                         .align(if (alignTextToTop) Alignment.Top else Alignment.CenterVertically),
                     contentAlignment = if (alignTextToTop) Alignment.TopStart else Alignment.CenterStart
                 ) {
-                    if (value.isEmpty()) {
+                    if (editor.text.isEmpty()) {
                         Text(
                             text = placeholder,
                             style = MaterialTheme.typography.bodyLarge.copy(

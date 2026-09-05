@@ -28,6 +28,7 @@ data class CharacterSummary(
     val updatedAt: Long
 )
 
+@kotlinx.serialization.Serializable
 data class CharacterDraft(
     val id: String? = null,
     val name: String = "",

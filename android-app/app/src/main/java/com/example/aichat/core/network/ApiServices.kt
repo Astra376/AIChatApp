@@ -100,6 +100,9 @@ interface ConversationApi {
 }
 
 interface ChatApi {
+    @POST("v1/conversations/{conversationId}/stop")
+    suspend fun stopReply(@Path("conversationId") conversationId: String, @Body body: StopChatRequestDto)
+
     @PATCH("v1/messages/{messageId}")
     suspend fun editMessage(
         @Path("messageId") messageId: String,

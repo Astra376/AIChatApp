@@ -26,7 +26,7 @@ class ChatBackgroundRepository @Inject constructor(
     private val generationLocks = ConcurrentHashMap<String, Mutex>()
 
     suspend fun ensureInitialBackground(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        backgroundResult {
             generationLock(conversationId).withLock {
                 ensureInitialBackgroundLocked(conversationId)
             }
@@ -37,7 +37,7 @@ class ChatBackgroundRepository @Inject constructor(
         conversationId: String,
         failedImageUrl: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        backgroundResult {
             generationLock(conversationId).withLock {
                 val failedUrl = failedImageUrl.trim()
                 if (failedUrl.isEmpty()) return@withLock
@@ -68,7 +68,8 @@ class ChatBackgroundRepository @Inject constructor(
                 // Do not discard the old URL until its replacement exists. A
                 // temporary network/provider failure must not make the chat
                 // permanently lose its last persisted background.
-                val replacementScene = ChatScenePromptBuilder.initialScene(character)
+                val initial = ChatScenePromptBuilder.initialScene(character)
+                val replacementScene = initial.copy(key = "${initial.key}-repair-${System.currentTimeMillis()}")
                 val replacementUrl = generateBackground(replacementScene)
                 require(replacementUrl.isNotEmpty()) { "Image generation returned an empty URL." }
                 database.withTransaction {
@@ -102,7 +103,7 @@ class ChatBackgroundRepository @Inject constructor(
     }
 
     suspend fun refreshIfSceneChanged(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        backgroundResult {
             generationLock(conversationId).withLock {
                 val detail = database.withTransaction {
                     val conversation = conversationDao.getById(conversationId) ?: return@withTransaction null
@@ -139,6 +140,8 @@ class ChatBackgroundRepository @Inject constructor(
         generationLocks.computeIfAbsent(conversationId) { Mutex() }
 
     private suspend fun ensureInitialBackgroundLocked(conversationId: String) {
+        // Reopening a chat must not replace an already generated scene.
+        if (!sceneDao.getByConversation(conversationId)?.imageUrl.isNullOrBlank()) return
         val detail = database.withTransaction {
             val conversation = conversationDao.getById(conversationId) ?: return@withTransaction null
             val character =
@@ -162,8 +165,9 @@ class ChatBackgroundRepository @Inject constructor(
         val scene = ChatScenePromptBuilder.initialScene(character)
         val imageUrl = generateBackground(scene)
         database.withTransaction {
+            val currentCharacter = database.characterDao().getById(character.id) ?: return@withTransaction
             database.characterDao().upsert(
-                character.copy(
+                currentCharacter.copy(
                     initialSceneUrl = imageUrl,
                     initialSceneKey = scene.key
                 )
@@ -180,24 +184,20 @@ class ChatBackgroundRepository @Inject constructor(
         }
     }
 
+    private suspend inline fun backgroundResult(block: () -> Unit): Result<Unit> = try {
+        block()
+        Result.success(Unit)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) { Result.failure(error) }
+
     private suspend fun generateBackground(scene: ScenePrompt): String {
-        var lastError: Throwable? = null
-        repeat(2) { attempt ->
-            try {
-                val imageUrl = imageApi.generateChatBackground(
-                    GenerateChatBackgroundRequestDto(scene.prompt, scene.key)
-                ).imageUrl.trim()
-                require(imageUrl.isNotEmpty()) { "Image generation returned an empty URL." }
-                return imageUrl
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                lastError = error
-                if (attempt == 0) {
-                    kotlinx.coroutines.delay(750L)
-                }
-            }
-        }
-        throw checkNotNull(lastError)
+        // Retrying a POST after a timeout can start a second billed generation.
+        // Provider status/download retries happen on the server using one job.
+        val imageUrl = imageApi.generateChatBackground(
+            GenerateChatBackgroundRequestDto(scene.prompt, scene.key)
+        ).imageUrl.trim()
+        require(imageUrl.isNotEmpty()) { "Image generation returned an empty URL." }
+        return imageUrl
     }
 }

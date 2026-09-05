@@ -51,7 +51,8 @@ describe("fal image provider", () => {
       prompt: "a scene",
       aspect_ratio: "16:9",
       output_format: "jpeg",
-      num_images: 1
+      num_images: 1,
+      resolution: "1K"
     });
     expect(JSON.parse(String(requests[0].init?.body))).not.toHaveProperty("image_size");
     expect(new Headers(requests[0].init?.headers).get("Authorization")).toBe("Key test-key");
@@ -186,7 +187,7 @@ describe("fal image provider", () => {
     await vi.runAllTimersAsync();
     await rejection;
 
-    expect(fetchMock).toHaveBeenCalledTimes(41);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(36);
     expect(fetchMock.mock.calls.length).toBeLessThan(45);
   });
 
@@ -209,4 +210,22 @@ describe("fal image provider", () => {
 
     expect(JSON.parse(requestBodies[0]).aspect_ratio).toBe("1:1");
   });
+});
+
+it("generates small previews and refines only the selected image at 1K", async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "POST") return Response.json({
+      request_id: "request-1", status_url: STATUS_URL, response_url: `${RESPONSE_URL}/response`
+    });
+    if (String(input).endsWith("/status")) return Response.json({ status: "COMPLETED", response_url: RESPONSE_URL });
+    return Response.json({ images: [{ url: "https://v3.fal.media/portrait.jpg" }] });
+  }));
+  await generatePortraitWithFal(env(), "portrait", true);
+  await generatePortraitWithFal(env(), "enhance", false, "https://worker.example/preview.jpg");
+  const submissions = requests.filter(request => request.body);
+  expect(submissions[0].body.resolution).toBe("0.5K");
+  expect(submissions[1].url).toBe(`${QUEUE_URL}/edit`);
+  expect(submissions[1].body).toMatchObject({ resolution: "1K", image_urls: ["https://worker.example/preview.jpg"] });
 });

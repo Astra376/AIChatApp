@@ -180,7 +180,9 @@ data class SelectRegenerationRequestDto(
 
 @Serializable
 data class GeneratePortraitRequestDto(
-    val prompt: String
+    val prompt: String,
+    val preview: Boolean = false,
+    val sourceAvatarUrl: String? = null
 )
 
 @Serializable
@@ -232,3 +234,6 @@ data class CursorPageDto<T>(
     val items: List<T>,
     val nextCursor: String? = null
 )
+
+@Serializable
+data class StopChatRequestDto(val runId: String)

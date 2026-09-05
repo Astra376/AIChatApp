@@ -346,7 +346,8 @@ describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
           expect.objectContaining({
             messageId: ASSISTANT_MESSAGE_ID,
             selectedRegenerationId: regenerations[0].id
-          })
+          }),
+          expect.any(String)
         );
         expect(insertedMessages()).toEqual([]);
       } else {
@@ -436,7 +437,7 @@ it("uses a lease longer than the client timeout and also settles through Readabl
   const claimCall = conversationMocks.claimConversationRun.mock.calls[0];
   const claimedAt = claimCall[3] as number;
   const expiresAt = claimCall[4] as number;
-  expect(expiresAt - claimedAt).toBeGreaterThan(180_000);
+  expect(expiresAt - claimedAt).toBeGreaterThan(125_000);
   expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(1);
   expect(removeAbortListener).toHaveBeenCalled();
 });

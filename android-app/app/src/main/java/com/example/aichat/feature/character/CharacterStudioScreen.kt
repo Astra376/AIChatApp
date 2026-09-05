@@ -89,18 +89,42 @@ data class CharacterStudioUiState(
     val portraitOptions: List<String> = emptyList(),
     val isSaving: Boolean = false,
     val isGeneratingPortraits: Boolean = false,
-    val isGeneratingGreeting: Boolean = false
+    val isGeneratingGreeting: Boolean = false,
+    val isEnhancingPortrait: Boolean = false,
+    val selectedPreview: String? = null
 )
 
 @HiltViewModel
 class CharacterStudioViewModel @Inject constructor(
     private val characterRepository: CharacterRepository,
-    private val conversationRepository: ConversationRepository
+    private val conversationRepository: ConversationRepository,
+    private val draftStore: CharacterDraftStore,
+    authRepository: com.example.aichat.core.auth.AuthRepository
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(CharacterStudioUiState())
+    private val ownerId = authRepository.sessionState.value.profile?.userId.orEmpty()
+    private val restored = draftStore.read(ownerId)
+    private val _uiState = MutableStateFlow(CharacterStudioUiState(
+        draft = restored.draft, step = restored.step, portraitOptions = restored.portraitOptions,
+        selectedPreview = restored.selectedPreview
+    ))
+    private var portraitJob: kotlinx.coroutines.Job? = null
     val uiState: StateFlow<CharacterStudioUiState> = _uiState.asStateFlow()
     private val _events = MutableSharedFlow<String>()
     val events = _events.asSharedFlow()
+
+    init {
+        viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            _uiState.collect { state ->
+                draftStore.save(ownerId, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
+            }
+        }
+    }
+
+    override fun onCleared() {
+        val state = _uiState.value
+        draftStore.save(ownerId, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
+        super.onCleared()
+    }
 
     fun updateDraft(transform: (CharacterDraft) -> CharacterDraft) {
         _uiState.value = _uiState.value.copy(draft = transform(_uiState.value.draft))
@@ -143,43 +167,62 @@ class CharacterStudioViewModel @Inject constructor(
 
     fun generatePortraits() {
         val state = _uiState.value
+        if (state.isGeneratingPortraits || state.isEnhancingPortrait) return
         val prompt = state.draft.appearance.ifBlank { state.draft.name }
+        if (prompt.isBlank()) return
+        _uiState.value = state.copy(isGeneratingPortraits = true)
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isGeneratingPortraits = true)
-            runCatching {
-                (1..4).map { index ->
-                    async {
-                        val variantPrompt = """
-                            $prompt
-                            Portrait option $index. Square full-bleed character image that fills the whole frame.
-                            No circular avatar crop, no round frame, no border, no blank background outside the character art.
-                        """.trimIndent()
-                        characterRepository.generatePortrait(variantPrompt).getOrThrow()
-                    }
-                }.awaitAll()
-            }.onSuccess { portraits ->
-                _uiState.value = _uiState.value.copy(
-                    isGeneratingPortraits = false,
-                    portraitOptions = portraits,
-                    draft = _uiState.value.draft.copy(avatarUrl = null)
-                )
-            }.onFailure {
+            try {
+                // Keep successful options even if one provider request fails.
+                val results = kotlinx.coroutines.supervisorScope {
+                    (1..4).map { index -> async {
+                        characterRepository.generatePortrait(
+                            "$prompt\nPortrait option $index. Square full-bleed character art, no borders.",
+                            preview = true
+                        )
+                    } }.awaitAll()
+                }
+                val portraits = results.mapNotNull { it.getOrNull() }
+                if (portraits.isNotEmpty()) {
+                    _uiState.value = _uiState.value.copy(portraitOptions = portraits,
+                        draft = _uiState.value.draft.copy(avatarUrl = null), selectedPreview = null)
+                } else {
+                    _events.emit(results.first().exceptionOrNull()?.userFacingMessage("Couldn't generate portraits. Try again.")
+                        ?: "Couldn't generate portraits. Try again.")
+                }
+            } finally {
                 _uiState.value = _uiState.value.copy(isGeneratingPortraits = false)
-                _events.emit(it.userFacingMessage("Portrait generation failed."))
             }
         }
     }
 
     fun selectPortrait(url: String) {
-        updateDraft { it.copy(avatarUrl = url) }
+        if (_uiState.value.isEnhancingPortrait || _uiState.value.isGeneratingPortraits) return
+        if (url !in _uiState.value.portraitOptions) return
+        if (_uiState.value.selectedPreview == url && _uiState.value.draft.avatarUrl != url) return
+        _uiState.value = _uiState.value.copy(selectedPreview = url, isEnhancingPortrait = true,
+            draft = _uiState.value.draft.copy(avatarUrl = url))
+        portraitJob = viewModelScope.launch {
+            try {
+                characterRepository.generatePortrait("Enhance the selected character portrait. Preserve its identity and composition.",
+                    sourceAvatarUrl = url)
+                    .onSuccess { fullResolution -> updateDraft { it.copy(avatarUrl = fullResolution) } }
+                    .onFailure { _events.emit("Preview saved. Tap it again to retry full quality.") }
+            } finally {
+                _uiState.value = _uiState.value.copy(isEnhancingPortrait = false)
+            }
+        }
     }
 
     fun uploadPortrait(uri: Uri) {
+        portraitJob?.cancel()
+        _uiState.value = _uiState.value.copy(selectedPreview = null)
         updateDraft { it.copy(avatarUrl = uri.toString()) }
     }
 
     fun generateGreeting() {
         val state = _uiState.value
+        if (state.isGeneratingGreeting) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isGeneratingGreeting = true)
             characterRepository.generateGreeting(state.draft.name, state.draft.appearance)
@@ -197,6 +240,7 @@ class CharacterStudioViewModel @Inject constructor(
     }
 
     fun createCharacter(ownerUserId: String, onCreated: (String) -> Unit) {
+        if (_uiState.value.isSaving || _uiState.value.isEnhancingPortrait) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true)
             val draft = _uiState.value.draft
@@ -356,9 +400,10 @@ private fun CharacterCreateStepContent(
         CharacterCreateStep.APPEARANCE -> AppearanceStep(
             name = state.draft.name,
             description = state.draft.appearance,
-            selectedAvatarUrl = state.draft.avatarUrl,
+            isEnhancing = state.isEnhancingPortrait,
+            selectedAvatarUrl = state.selectedPreview ?: state.draft.avatarUrl,
             portraitOptions = state.portraitOptions,
-            isGenerating = state.isGeneratingPortraits,
+            isGenerating = state.isGeneratingPortraits || state.isEnhancingPortrait,
             onDescriptionChanged = onAppearanceChanged,
             onGenerate = onGeneratePortraits,
             onSelectPortrait = onSelectPortrait,
@@ -447,6 +492,7 @@ private fun NameStep(
 @Composable
 private fun AppearanceStep(
     name: String,
+    isEnhancing: Boolean,
     description: String,
     selectedAvatarUrl: String?,
     portraitOptions: List<String>,
@@ -459,8 +505,12 @@ private fun AppearanceStep(
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let(onUploadPortrait)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            onUploadPortrait(it)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -473,6 +523,8 @@ private fun AppearanceStep(
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         StepTitle("What do they look like?")
+        Text(if (isEnhancing) "Enhancing selected portrait…" else "Choose a preview to create the full-quality portrait.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (portraitOptions.isNotEmpty() || isGenerating) {
             PortraitOptionGrid(
                 options = portraitOptions,
@@ -509,7 +561,7 @@ private fun AppearanceStep(
             text = "Upload an image",
             modifier = Modifier.fillMaxWidth(),
             leadingIcon = { AppIcon(AppIcons.createAction, contentDescription = null) },
-            onClick = { launcher.launch("image/*") }
+            onClick = { launcher.launch(arrayOf("image/*")) }
         )
     }
 }
@@ -539,7 +591,7 @@ private fun PortraitOptionGrid(
                                     avatarUrl = url,
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .clickable { onSelectPortrait(url) }
+                                        .clickable(enabled = !isGenerating) { onSelectPortrait(url) }
                                         .border(
                                             width = if (url == selectedAvatarUrl) 3.dp else 0.dp,
                                             color = if (url == selectedAvatarUrl) {
@@ -877,7 +929,7 @@ private fun CharacterCreateBottomAction(
 ) {
     val enabled = when (state.step) {
         CharacterCreateStep.NAME -> state.draft.name.isNotBlank()
-        CharacterCreateStep.APPEARANCE -> !state.draft.avatarUrl.isNullOrBlank()
+        CharacterCreateStep.APPEARANCE -> !state.draft.avatarUrl.isNullOrBlank() && !state.isEnhancingPortrait && !state.isGeneratingPortraits
         CharacterCreateStep.GREETING -> state.draft.greeting.isNotBlank() && !state.isGeneratingGreeting
         CharacterCreateStep.VISIBILITY -> true
         CharacterCreateStep.DETAILS -> !state.isSaving

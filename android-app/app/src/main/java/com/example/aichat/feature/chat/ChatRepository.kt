@@ -150,48 +150,48 @@ class ChatRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 kotlinx.coroutines.withTimeout(12_000) {
-            captureResult {
-                STOP_RECONCILIATION_DELAYS_MS.forEachIndexed { attempt, delayMillis ->
-                    if (delayMillis > 0L) delay(delayMillis)
-                    val stream = currentActiveStream(conversationId)
-                    if (stream?.draftKey != draftKey || stream.status != ActiveStreamStatus.STOPPING) {
-                        return@captureResult
-                    }
-                    val detail = conversationApi.getConversation(conversationId)
-                    database.withTransaction {
-                        val current = currentActiveStream(conversationId)
-                        if (current?.draftKey == draftKey && current.status == ActiveStreamStatus.STOPPING) {
-                            applyRemoteConversationDetail(detail)
+                    captureResult {
+                        STOP_RECONCILIATION_DELAYS_MS.forEachIndexed { attempt, delayMillis ->
+                            if (delayMillis > 0L) delay(delayMillis)
+                            val stream = currentActiveStream(conversationId)
+                            if (stream?.draftKey != draftKey || stream.status != ActiveStreamStatus.STOPPING) {
+                                return@captureResult
+                            }
+                            val detail = conversationApi.getConversation(conversationId)
+                            database.withTransaction {
+                                val current = currentActiveStream(conversationId)
+                                if (current?.draftKey == draftKey && current.status == ActiveStreamStatus.STOPPING) {
+                                    applyRemoteConversationDetail(detail)
+                                }
+                            }
+                            if (stoppedResultIsCommitted(stream, detail)) {
+                                clearActiveStream(conversationId, draftKey)
+                                return@captureResult
+                            }
+
+                            if (
+                                stream.text.isBlank() &&
+                                stream.mode == ActiveStreamMode.SEND &&
+                                stream.userMessageId != null &&
+                                detail.messages.none { it.id == stream.userMessageId } &&
+                                attempt >= 2
+                            ) {
+                                clearActiveStream(conversationId, draftKey)
+                                return@captureResult
+                            }
+
+                            if (
+                                stream.text.isBlank() &&
+                                attempt == STOP_RECONCILIATION_DELAYS_MS.lastIndex
+                            ) {
+                                clearActiveStream(conversationId, draftKey)
+                                return@captureResult
+                            }
+                        }
+                        updateActiveStream(conversationId, draftKey) { stream ->
+                            stream.copy(status = ActiveStreamStatus.STOPPED)
                         }
                     }
-                    if (stoppedResultIsCommitted(stream, detail)) {
-                        clearActiveStream(conversationId, draftKey)
-                        return@captureResult
-                    }
-
-                    if (
-                        stream.text.isBlank() &&
-                        stream.mode == ActiveStreamMode.SEND &&
-                        stream.userMessageId != null &&
-                        detail.messages.none { it.id == stream.userMessageId } &&
-                        attempt >= 2
-                    ) {
-                        clearActiveStream(conversationId, draftKey)
-                        return@captureResult
-                    }
-
-                    if (
-                        stream.text.isBlank() &&
-                        attempt == STOP_RECONCILIATION_DELAYS_MS.lastIndex
-                    ) {
-                        clearActiveStream(conversationId, draftKey)
-                        return@captureResult
-                    }
-                }
-                updateActiveStream(conversationId, draftKey) { stream ->
-                    stream.copy(status = ActiveStreamStatus.STOPPED)
-                }
-            }
                 }
             } finally {
                 val stream = currentActiveStream(conversationId)

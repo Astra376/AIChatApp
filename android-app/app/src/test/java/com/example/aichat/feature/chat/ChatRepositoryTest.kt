@@ -201,6 +201,21 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun failedStopReconciliationAlwaysUnlocksLocalChat() = runTest {
+        seedConversation(version = 1)
+        val events = MutableSharedFlow<ChatStreamEvent>(replay = 8)
+        streamingClient.sendHandler = { _, _, _ -> events }
+        val job = backgroundScope.launch { repository.sendMessage(CONVERSATION_ID, "hello") }
+        val stream = checkNotNull(repository.observeActiveStream(CONVERSATION_ID).first { it != null })
+        repository.requestStop(CONVERSATION_ID, stream.draftKey)
+        job.cancel()
+        job.join()
+        conversationApi.failure = java.io.IOException("offline")
+        assertThat(repository.reconcileStoppedStream(CONVERSATION_ID, stream.draftKey).isFailure).isTrue()
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()).isNull()
+    }
+
+    @Test
     fun stopRequested_beforeAcceptance_keepsUserMessageAndSettlesDraft() = runTest {
         seedConversation(version = 1)
         val sendEvents = MutableSharedFlow<ChatStreamEvent>(replay = 8)
@@ -777,6 +792,7 @@ class ChatRepositoryTest {
 
     private class FakeConversationApi : ConversationApi {
         var detail: ConversationDetailDto? = null
+        var failure: Throwable? = null
 
         override suspend fun getConversations(cursor: String?): CursorPageDto<ConversationSummaryDto> {
             return CursorPageDto(emptyList())
@@ -787,6 +803,7 @@ class ChatRepositoryTest {
         }
 
         override suspend fun getConversation(conversationId: String): ConversationDetailDto {
+            failure?.let { throw it }
             return detail ?: ConversationDetailDto(
                 id = conversationId,
                 ownerUserId = USER_ID,

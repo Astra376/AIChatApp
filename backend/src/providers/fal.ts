@@ -258,152 +258,152 @@ async function generateImageWithFal(
   const budget = new FalFetchBudget();
   const deadline = new RequestDeadline(140_000, 140_000);
   try {
-  const queueResponse = await fetchFal(`${FAL_QUEUE_ORIGIN}/${configuration.model}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Key ${configuration.apiKey}`
-    },
-    body: JSON.stringify({
-      prompt: options.prompt,
-      aspect_ratio: options.aspectRatio,
-      output_format: "jpeg",
-      num_images: 1,
-      resolution: options.resolution,
-      ...(options.referenceImageUrl ? { image_urls: [options.referenceImageUrl] } : {})
-    })
-  }, {
-    budget,
-    deadline,
-    attempts: 1,
-    stage: "queue"
-  });
-
-  if (!queueResponse.ok) {
-    await throwFalHttpError(queueResponse, {
-      stage: "queue",
-      code: "FAL_QUEUE_ERROR",
-      message: "Image generation could not be queued."
-    });
-  }
-
-  const queued = await deadline.run(parseFalResponse<FalQueueResponse>(queueResponse, {
-    stage: "queue",
-    code: "FAL_QUEUE_ERROR",
-    message: "Image generation returned an invalid queue response."
-  }));
-  if (typeof queued?.request_id !== "string" || !queued.request_id.trim() || queued.request_id.length > 200) {
-    throw new AppError(502, "FAL_QUEUE_ERROR", "Image generation did not return a request id.");
-  }
-
-  const fallbackStatusUrl = canonicalFalRequestUrl(configuration.model, queued.request_id, "status");
-  const fallbackResponseUrl = canonicalFalRequestUrl(configuration.model, queued.request_id, "result");
-  const statusUrl = validatedFalRequestUrl(
-    queued.status_url,
-    fallbackStatusUrl,
-    "status",
-    "FAL_QUEUE_ERROR"
-  );
-  let resultUrl = validatedFalRequestUrl(
-    queued.response_url,
-    fallbackResponseUrl,
-    "result",
-    "FAL_QUEUE_ERROR"
-  );
-
-  for (let attempt = 0; attempt < FAL_STATUS_ATTEMPTS; attempt += 1) {
-    if (budget.remaining <= FAL_RESULT_FETCH_RESERVE) break;
-
-    const statusResponse = await fetchFal(statusUrl, {
+    const queueResponse = await fetchFal(`${FAL_QUEUE_ORIGIN}/${configuration.model}`, {
+      method: "POST",
       headers: {
+        "Content-Type": "application/json",
         Authorization: `Key ${configuration.apiKey}`
-      }
+      },
+      body: JSON.stringify({
+        prompt: options.prompt,
+        aspect_ratio: options.aspectRatio,
+        output_format: "jpeg",
+        num_images: 1,
+        resolution: options.resolution,
+        ...(options.referenceImageUrl ? { image_urls: [options.referenceImageUrl] } : {})
+      })
     }, {
       budget,
-    deadline,
-      attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining - FAL_RESULT_FETCH_RESERVE),
-      stage: "status",
-      requestId: queued.request_id
+      deadline,
+      attempts: 1,
+      stage: "queue"
     });
 
-    if (!statusResponse.ok) {
-      await throwFalHttpError(statusResponse, {
+    if (!queueResponse.ok) {
+      await throwFalHttpError(queueResponse, {
+        stage: "queue",
+        code: "FAL_QUEUE_ERROR",
+        message: "Image generation could not be queued."
+      });
+    }
+
+    const queued = await deadline.run(parseFalResponse<FalQueueResponse>(queueResponse, {
+      stage: "queue",
+      code: "FAL_QUEUE_ERROR",
+      message: "Image generation returned an invalid queue response."
+    }));
+    if (typeof queued?.request_id !== "string" || !queued.request_id.trim() || queued.request_id.length > 200) {
+      throw new AppError(502, "FAL_QUEUE_ERROR", "Image generation did not return a request id.");
+    }
+
+    const fallbackStatusUrl = canonicalFalRequestUrl(configuration.model, queued.request_id, "status");
+    const fallbackResponseUrl = canonicalFalRequestUrl(configuration.model, queued.request_id, "result");
+    const statusUrl = validatedFalRequestUrl(
+      queued.status_url,
+      fallbackStatusUrl,
+      "status",
+      "FAL_QUEUE_ERROR"
+    );
+    let resultUrl = validatedFalRequestUrl(
+      queued.response_url,
+      fallbackResponseUrl,
+      "result",
+      "FAL_QUEUE_ERROR"
+    );
+
+    for (let attempt = 0; attempt < FAL_STATUS_ATTEMPTS; attempt += 1) {
+      if (budget.remaining <= FAL_RESULT_FETCH_RESERVE) break;
+
+      const statusResponse = await fetchFal(statusUrl, {
+        headers: {
+          Authorization: `Key ${configuration.apiKey}`
+        }
+      }, {
+        budget,
+      deadline,
+        attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining - FAL_RESULT_FETCH_RESERVE),
         stage: "status",
-        code: "FAL_STATUS_ERROR",
-        message: "Image generation status failed.",
         requestId: queued.request_id
       });
-    }
 
-    const status = await deadline.run(parseFalResponse<FalStatusResponse>(statusResponse, {
-      stage: "status",
-      code: "FAL_STATUS_ERROR",
-      message: "Image generation returned an invalid status response.",
-      requestId: queued.request_id
-    }));
-    if (status.status === "FAILED") {
-      console.warn("Fal generation failed", {
-        requestId: queued.request_id,
-        errorType: diagnosticValue(status.error_type),
-        detail: diagnosticValue(status.error)
-      });
-      throw new AppError(502, "FAL_FAILED", "Image generation failed.");
-    }
+      if (!statusResponse.ok) {
+        await throwFalHttpError(statusResponse, {
+          stage: "status",
+          code: "FAL_STATUS_ERROR",
+          message: "Image generation status failed.",
+          requestId: queued.request_id
+        });
+      }
 
-    if (status.status === "COMPLETED") {
-      if (status.error != null || status.error_type != null) {
-        console.warn("Fal generation completed with an error", {
+      const status = await deadline.run(parseFalResponse<FalStatusResponse>(statusResponse, {
+        stage: "status",
+        code: "FAL_STATUS_ERROR",
+        message: "Image generation returned an invalid status response.",
+        requestId: queued.request_id
+      }));
+      if (status.status === "FAILED") {
+        console.warn("Fal generation failed", {
           requestId: queued.request_id,
           errorType: diagnosticValue(status.error_type),
           detail: diagnosticValue(status.error)
         });
         throw new AppError(502, "FAL_FAILED", "Image generation failed.");
       }
-      resultUrl = validatedFalRequestUrl(
-        status.response_url,
-        resultUrl,
-        "result",
-        "FAL_STATUS_ERROR"
-      );
-      const resultResponse = await fetchFal(
-        resultUrl,
-        {
-          headers: {
-            Authorization: `Key ${configuration.apiKey}`
-          }
-        },
-        {
-          budget,
-    deadline,
-          attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining),
-          stage: "result",
-          requestId: queued.request_id
+
+      if (status.status === "COMPLETED") {
+        if (status.error != null || status.error_type != null) {
+          console.warn("Fal generation completed with an error", {
+            requestId: queued.request_id,
+            errorType: diagnosticValue(status.error_type),
+            detail: diagnosticValue(status.error)
+          });
+          throw new AppError(502, "FAL_FAILED", "Image generation failed.");
         }
-      );
-      if (!resultResponse.ok) {
-        await throwFalHttpError(resultResponse, {
+        resultUrl = validatedFalRequestUrl(
+          status.response_url,
+          resultUrl,
+          "result",
+          "FAL_STATUS_ERROR"
+        );
+        const resultResponse = await fetchFal(
+          resultUrl,
+          {
+            headers: {
+              Authorization: `Key ${configuration.apiKey}`
+            }
+          },
+          {
+            budget,
+      deadline,
+            attempts: Math.min(FAL_GET_ATTEMPTS, budget.remaining),
+            stage: "result",
+            requestId: queued.request_id
+          }
+        );
+        if (!resultResponse.ok) {
+          await throwFalHttpError(resultResponse, {
+            stage: "result",
+            code: "FAL_RESULT_ERROR",
+            message: "Image generation result fetch failed.",
+            requestId: queued.request_id
+          });
+        }
+        const result = await deadline.run(parseFalResponse<FalResultResponse>(resultResponse, {
           stage: "result",
           code: "FAL_RESULT_ERROR",
-          message: "Image generation result fetch failed.",
+          message: "Image generation returned an invalid result response.",
           requestId: queued.request_id
-        });
+        }));
+        return requireGeneratedImageUrl(result.images?.[0]?.url);
       }
-      const result = await deadline.run(parseFalResponse<FalResultResponse>(resultResponse, {
-        stage: "result",
-        code: "FAL_RESULT_ERROR",
-        message: "Image generation returned an invalid result response.",
-        requestId: queued.request_id
-      }));
-      return requireGeneratedImageUrl(result.images?.[0]?.url);
+
+      if (status.status !== "IN_QUEUE" && status.status !== "IN_PROGRESS") {
+        throw new AppError(502, "FAL_STATUS_ERROR", "Image generation returned an invalid status.");
+      }
+      await deadline.run(new Promise((resolve) => setTimeout(resolve, FAL_STATUS_POLL_INTERVAL_MS)));
     }
 
-    if (status.status !== "IN_QUEUE" && status.status !== "IN_PROGRESS") {
-      throw new AppError(502, "FAL_STATUS_ERROR", "Image generation returned an invalid status.");
-    }
-    await deadline.run(new Promise((resolve) => setTimeout(resolve, FAL_STATUS_POLL_INTERVAL_MS)));
-  }
-
-  throw new AppError(504, "FAL_TIMEOUT", "Image generation timed out.");
+    throw new AppError(504, "FAL_TIMEOUT", "Image generation timed out.");
   } finally {
     deadline.dispose();
   }

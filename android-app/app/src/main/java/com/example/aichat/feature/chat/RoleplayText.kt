@@ -53,7 +53,7 @@ internal fun formatRoleplayText(
                 "**" -> SpanStyle(fontWeight = FontWeight.Bold)
                 "*" -> SpanStyle(fontStyle = FontStyle.Italic, color = narrationColor)
                 "`", "```" -> SpanStyle(fontFamily = FontFamily.Monospace)
-                else -> SpanStyle(color = speechColor, fontWeight = FontWeight.Medium)
+                else -> SpanStyle(color = speechColor, fontWeight = FontWeight.SemiBold)
             }
             pushStyle(style)
             if (quoted) append(marker)

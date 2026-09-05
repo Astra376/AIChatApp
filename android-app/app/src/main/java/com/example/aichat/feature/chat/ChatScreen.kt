@@ -1,6 +1,7 @@
 package com.example.aichat.feature.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -62,6 +64,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -998,7 +1001,10 @@ private fun ChatComposerBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(background)
             .imePadding()
+            .navigationBarsPadding()
+            .padding(bottom = 4.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1125,13 +1131,6 @@ private fun ChatHeader(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                }
-                IconCircleButton(
-                    enabled = !isLoading,
-                    containerSize = AppChrome.compactControlSize,
-                    onClick = onOpenDetails
-                ) {
-                    AppIcon(AppIcons.settings, contentDescription = "Character menu", size = AppChrome.headerActionIconSize)
                 }
                 IconCircleButton(
                     enabled = !isLoading,
@@ -1302,9 +1301,8 @@ private fun VariantMessagePager(
         }
     }
 
-    // Keep the pager pinned to the settled page's measured height. Switching
-    // variants updates the height immediately: no artificial reveal animation
-    // and no forced transcript scrolling when the new reply already fits.
+    // Let Compose animate between the settled pages' measured heights, using
+    // its default animation alongside HorizontalPager's native page motion.
     val density = LocalDensity.current
     val settledHeightPx = pageHeights.getOrElse(settledVisualPage) { 0 }
     val isSettledHeightMeasured = settledHeightPx > 0
@@ -1312,6 +1310,7 @@ private fun VariantMessagePager(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .animateContentSize()
             .then(
                 if (isSettledHeightMeasured) {
                     Modifier.height(with(density) { settledHeightPx.toDp() })
@@ -1576,8 +1575,12 @@ private fun ChatMessage.variantTexts(): List<String> = listOf(content) + regener
 @Composable
 private fun roleplayAnnotatedText(value: String) = formatRoleplayText(
     value,
-    narrationColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    speechColor = MaterialTheme.colorScheme.onSurface
+    narrationColor = MaterialTheme.colorScheme.onSurface,
+    speechColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+        Color(0xFFD5E7FA)
+    } else {
+        Color(0xFF24486E)
+    }
 )
 
 @Composable

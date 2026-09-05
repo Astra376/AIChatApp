@@ -33,9 +33,9 @@ private val DarkColors = darkColorScheme(
     onTertiary = Color(0xFF14171B),
     background = Color(0xFF101214),
     onBackground = Color(0xFFF1F3F5),
-    surface = Color(0xFF171A1E),
+    surface = Color(0xFF131619),
     onSurface = Color(0xFFF1F3F5),
-    surfaceVariant = Color(0xFF1E2227),
+    surfaceVariant = Color(0xFF181C21),
     onSurfaceVariant = Color(0xFF8D95A0),
     outline = Color(0xFF2D3238)
 )

@@ -93,7 +93,7 @@ class ChatBackgroundRepositoryTest {
         val result = repository.ensureInitialBackground(CONVERSATION_ID)
 
         assertThat(result.isFailure).isTrue()
-        assertThat(imageApi.backgroundRequests).hasSize(2)
+        assertThat(imageApi.backgroundRequests).hasSize(1)
         assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)).isNull()
         assertThat(database.characterDao().getById(CHARACTER_ID)?.initialSceneUrl).isNull()
     }
@@ -172,6 +172,17 @@ class ChatBackgroundRepositoryTest {
             .isEqualTo(brokenUrl)
         assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl)
             .isEqualTo(brokenUrl)
+    }
+
+    @Test
+    fun reopeningChatPreservesTheCurrentScene() = runTest {
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        val scene = requireNotNull(database.conversationSceneDao().getByConversation(CONVERSATION_ID))
+        database.conversationSceneDao().upsert(scene.copy(sceneKey = "new-scene", imageUrl = "https://assets.example/new.jpg"))
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl)
+            .isEqualTo("https://assets.example/new.jpg")
+        assertThat(imageApi.backgroundRequests).hasSize(1)
     }
 
     private suspend fun seedConversation() {

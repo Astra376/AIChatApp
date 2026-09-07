@@ -294,6 +294,9 @@ signed unsubscribe link. The scheduled delivery checks settings, inactivity,
 read/dismissed state and rate limits before sending. Missing email configuration
 skips delivery; it never records an email as sent. The sender address remains the
 verified app address. No email has been sent as part of automated validation.
+Offline generation produces a varied, discreet character-named subject alongside
+the message in the same model request. Invalid titles fall back to the standard
+“sent you a message” subject; title metadata never enters the chat transcript.
 
 ### Ultra subscription activation (configuration can be added later)
 
@@ -386,8 +389,10 @@ OPENROUTER_FALLBACK_MODELS = ""
 ```
 
 Flash is restricted to the configured Venice provider instead of silently
-switching model revisions. Ultra selects Pro only after server entitlement
-verification. Pro uses its own optional `OPENROUTER_ULTRA_PROVIDERS` restriction;
+switching model revisions. Manual Ultra selection requires server entitlement
+verification. Automatic mode also allows bounded Pro/reasoning turns for Standard
+accounts (one Pro and four total reasoning turns per day, shared across chats).
+Pro uses its own optional `OPENROUTER_ULTRA_PROVIDERS` restriction;
 by default it uses the available OpenRouter provider set. The Flash Venice
 restriction must not be inherited by Pro because that provider does not list
 Pro 0813. Provider availability, provider policies and latency can change;

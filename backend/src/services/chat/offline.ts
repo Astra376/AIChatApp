@@ -30,6 +30,37 @@ interface Candidate {
   anchor_id: string; anchor_at: number; user_count: number; delivered_stage: number;
 }
 
+function notificationTitle(characterName: string, value?: unknown): string {
+  const name = characterName.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+    .replace(/\s+/g, " ").trim().slice(0, 80) || "Your character";
+  const fallback = `${name} sent you a message`;
+  if (typeof value !== "string") return fallback;
+  // Subjects are plain, bounded text: never allow line/header injection, links,
+  // markup, or a different character's identity into a phone/email preview.
+  if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f<>*_`#]|https?:|www\.|\S+@\S+/i.test(value)) return fallback;
+  const title = value.replace(/\s+/g, " ").trim();
+  return title.startsWith(`${name} `) && title.length <= 120 && title.length > name.length + 2 ? title : fallback;
+}
+
+/** The same model response supplies the message and its notification preview.
+ * Older/plain-text providers remain usable; malformed metadata never becomes a
+ * character message. A bad title alone must not discard a valid reply. */
+export function parseOfflineGeneration(raw: string, characterName: string): { message: string; title: string } {
+  const text = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let message = raw;
+  let title: unknown;
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || typeof (parsed as Record<string, unknown>).message !== "string") throw new Error("Invalid offline reply");
+    message = (parsed as { message: string }).message;
+    title = (parsed as Record<string, unknown>).notificationTitle;
+  }
+  message = formatRoleplayMessage(message);
+  if (!message.trim()) throw new Error("Empty offline reply");
+  return { message, title: notificationTitle(characterName, title) };
+}
+
 export async function latestOfflineTranscript(env: Env, conversationId: string) {
   const result = await env.DB.prepare(`SELECT role, content FROM (
     SELECT m.role, COALESCE(r.content, m.content) AS content, m.position FROM messages m
@@ -39,7 +70,7 @@ export async function latestOfflineTranscript(env: Env, conversationId: string) 
   return result.results ?? [];
 }
 
-export async function saveOfflineMessage(env: Env, candidate: Candidate, stage: number, text: string, now: number): Promise<boolean> {
+export async function saveOfflineMessage(env: Env, candidate: Candidate, stage: number, text: string, now: number, title?: string): Promise<boolean> {
   const id = `offline:${candidate.id}:${candidate.anchor_id}:${stage}`;
   // The insert, conversation revision and activity item commit together. User activity, a new reply,
   // an edit/rewind, or a changed preference during generation invalidates this write without locking chat.
@@ -63,7 +94,7 @@ export async function saveOfflineMessage(env: Env, candidate: Candidate, stage: 
     env.DB.prepare(`INSERT OR IGNORE INTO notifications
       (id, user_id, kind, title, body, character_id, conversation_id, avatar_url, created_at, updated_at, dedup_key)
       SELECT ?, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM messages WHERE id = ?)`)
-      .bind(id, candidate.owner_user_id, `${candidate.name} sent you a message`, text.slice(0, 240), candidate.character_id,
+      .bind(id, candidate.owner_user_id, notificationTitle(candidate.name, title), text.slice(0, 240), candidate.character_id,
         candidate.id, candidate.avatar_url, now, now, id, id),
     env.DB.prepare(`UPDATE offline_deliveries SET state = CASE WHEN EXISTS (SELECT 1 FROM messages WHERE id = ?) THEN 'delivered' ELSE 'obsolete' END,
       message_id = ?, updated_at = ? WHERE conversation_id = ? AND anchor_message_id = ? AND stage = ?`)
@@ -88,12 +119,11 @@ async function processCandidate(env: Env, candidate: Candidate, now: number): Pr
       resolveConversationPersonaPrompt(env, candidate.id, candidate.owner_user_id),
       modelEnvironmentForUser(env, candidate.owner_user_id)
     ]);
-    const text = formatRoleplayMessage(await completeChatText(modelEnv, [
-      {role: "system", content: composeCharacterSystemPrompt(candidate.system_prompt, [memory, persona].filter(Boolean).join("\n\n")) + "\n\nThe user is away. Continue naturally in character with one short, relevant message based on the latest conversation. Do not pressure, guilt, claim an emergency, or mention a notification schedule. Ask at most one question. Keep it under 80 words. Do not repeat earlier follow-ups."},
+    const generated = parseOfflineGeneration(await completeChatText(modelEnv, [
+      {role: "system", content: composeCharacterSystemPrompt(candidate.system_prompt, [memory, persona].filter(Boolean).join("\n\n")) + `\n\nThe user is away. Return only JSON {"message":"your character's message","notificationTitle":"a short notification title"}. In message, continue naturally in character with one short, relevant message based on the latest conversation. Do not pressure, guilt, claim an emergency, or mention a notification schedule. Ask at most one question. Keep message under 80 words. Do not repeat earlier follow-ups. notificationTitle must start with the character name ${JSON.stringify(candidate.name)} followed by a space, stay under 120 characters, and sound natural for this character. Vary it to suit the message, such as a gentle invitation or something they want to share. Keep the title discreet: no private conversation details, user names, urgency, guilt, links or formatting. The title is metadata and must not appear in message.`},
       ...transcript
-    ], {maxTokens: 220, temperature: 0.85}));
-    if (!text.trim()) throw new Error("Empty offline reply");
-    await saveOfflineMessage(env, candidate, stage, text, Date.now());
+    ], {maxTokens: 320, temperature: 0.85}), candidate.name);
+    await saveOfflineMessage(env, candidate, stage, generated.message, Date.now(), generated.title);
   } catch {
     await env.DB.prepare("UPDATE offline_deliveries SET state = CASE WHEN attempts >= 2 THEN 'obsolete' ELSE 'failed' END, updated_at = ? WHERE conversation_id = ? AND anchor_message_id = ? AND stage = ?")
       .bind(Date.now(), candidate.id, candidate.anchor_id, stage).run();

@@ -27,7 +27,7 @@ This branch preserves the native Compose layout and repairs the chat lifecycle w
 ## Activity, voices and Ultra
 
 - Activity supports individual/all dismissal and navigation to chats, characters, creators and groups. Character unread counts aggregate by character and sort the unread rail.
-- Character follow-ups adapt to engagement. Follower bursts are grouped, and followed-creator updates and dormant-user recommendations are limited. Notification categories and email have separate switches.
+- Character follow-ups adapt to engagement. Varied notification and email titles are generated alongside the message in one request. Follower bursts are grouped, and followed-creator updates and dormant-user recommendations are limited. Notification categories and email have separate switches.
 - Android phone notifications use WorkManager. Android power management can delay its periodic work; this is not a real-time FCM delivery service.
 - Read-aloud checks media volume before requesting paid audio. Official/community voices are available to everyone; describing or sampling a custom voice requires Ultra. Video samples are reduced to audio.
 - Meek Standard uses DeepSeek V4 Flash 0731 through the configured Venice route. Meek Ultra uses DeepSeek V4 Pro 0813. Automatic mode normally stays fast and uses bounded reasoning/Pro allowances when the turn warrants it. Provider latency routing is used; no dedicated provider priority capacity is claimed.

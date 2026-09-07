@@ -6,6 +6,9 @@ import { DEFAULT_NOTIFICATION_SETTINGS, dismissNotifications, getFollowState, ge
   listNotifications, notifyCharacterPublished, processRecommendations, setFollow, updateNotificationSettings, updatePresence } from "./index";
 import { deliverNotificationEmails, unsubscribeEmail, unsubscribeToken } from "./email";
 import { dueOfflineStage, latestOfflineTranscript, offlineSchedule, processOfflineMessages, saveOfflineMessage } from "../chat/offline";
+import * as openrouter from "../../providers/openrouter";
+import * as memory from "../chat/memory";
+import * as personas from "../personas";
 
 function database() {
   const sqlite = new DatabaseSync(":memory:");
@@ -42,7 +45,7 @@ function database() {
     "INSERT INTO notifications (id,user_id,kind,title,body,conversation_id,created_at,updated_at,dedup_key) VALUES (?,?,?,'Astrid sent you a message','Hello','chat',?,?,?)").run(id,owner,kind,now,now,id);
   return {sqlite,env,context,now,addMessage,candidate,addNotification};
 }
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("notification preferences and activity", () => {
   it("defaults on, updates individual toggles, and rejects invalid settings", async () => {
@@ -127,6 +130,30 @@ describe("offline message scheduling", () => {
     const {env,sqlite,addMessage}=database(); const fetch=vi.fn();vi.stubGlobal("fetch",fetch);
     try{addMessage(0);await processOfflineMessages(env);expect(fetch).not.toHaveBeenCalled();}
     finally{sqlite.close();}
+  });
+  it("generates message and title once and shares that title with activity and email",async()=>{
+    const {env,sqlite,addMessage,now}=database();
+    const title="Astrid has something to share";
+    const message="I found that trail we were talking about. Want to hear about it?";
+    const generate=vi.spyOn(openrouter,"completeChatText").mockResolvedValue(JSON.stringify({message,notificationTitle:title}));
+    vi.spyOn(memory,"buildCharacterMemoryPrompt").mockResolvedValue("");
+    vi.spyOn(personas,"resolveConversationPersonaPrompt").mockResolvedValue("Your name is User.");
+    try {
+      for(let i=0;i<40;i++) addMessage(i);
+      await processOfflineMessages(env);
+      expect(generate).toHaveBeenCalledOnce();
+      expect(sqlite.prepare("SELECT content FROM messages ORDER BY position DESC LIMIT 1").get()?.content).toBe(message);
+      expect(sqlite.prepare("SELECT title,body FROM notifications WHERE kind='chat'").get()).toMatchObject({title,body:message});
+      Object.assign(env,{RESEND_API_KEY:"test-only",NOTIFICATION_EMAIL_FROM:"Meek <test@example.com>"});
+      const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({id:"fake-provider-id"}),{status:200}));
+      vi.stubGlobal("fetch",fetch);
+      await deliverNotificationEmails(env,now+1000);
+      expect(fetch).toHaveBeenCalledOnce();
+      const email=JSON.parse(fetch.mock.calls[0][1].body);
+      expect(email.subject).toBe(title);
+      expect(email.text).toContain(message);
+      expect(generate).toHaveBeenCalledOnce();
+    } finally { sqlite.close(); }
   });
 });
 

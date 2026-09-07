@@ -5,6 +5,11 @@ const schemaMocks = vi.hoisted(() => ({
   ensureConversationStreamingSchema: vi.fn()
 }));
 
+const memorySchemaMocks = vi.hoisted(() => ({ensureConversationMemorySchema: vi.fn()}));
+const mutationMocks = vi.hoisted(() => ({editMessageAtomically: vi.fn(), rewindToMessageAtomically: vi.fn(), selectRegenerationAtomically: vi.fn()}));
+vi.mock("../../db/ensureConversationMemorySchema", () => memorySchemaMocks);
+vi.mock("../../db/queries/transcriptMutations", () => mutationMocks);
+
 const characterMocks = vi.hoisted(() => ({
   getCharacterById: vi.fn(),
   incrementCharacterActivity: vi.fn()
@@ -50,6 +55,7 @@ vi.mock("./memory", () => memoryMocks);
 
 import {
   continueAssistantAndStream,
+  editMessage, rewindConversation, selectRegeneration,
   regenerateLatestAssistantAndStream,
   sendMessageAndStream
 } from ".";
@@ -260,6 +266,7 @@ beforeEach(() => {
   personaMocks.resolveConversationPersonaPrompt.mockResolvedValue("");
 
   schemaMocks.ensureConversationStreamingSchema.mockResolvedValue(undefined);
+  memorySchemaMocks.ensureConversationMemorySchema.mockResolvedValue(undefined);
   characterMocks.getCharacterById.mockResolvedValue({
     id: CHARACTER_ID,
     owner_user_id: "creator-1",
@@ -484,4 +491,24 @@ it("uses a bounded lease longer than the provider budget and also settles throug
   expect(expiresAt - claimedAt).toBe(75_000);
   expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(1);
   expect(removeAbortListener).toHaveBeenCalled();
+});
+
+it("installs derived-memory invalidation before the first edit, rewind or variant change after an upgrade", async () => {
+  const {context} = createContext();
+  conversationMocks.getMessageById.mockResolvedValue(assistantMessageRecord());
+  let installed = false;
+  memorySchemaMocks.ensureConversationMemorySchema.mockImplementation(async () => {installed = true;});
+  const write = async () => {expect(installed).toBe(true); return true;};
+  mutationMocks.editMessageAtomically.mockImplementation(write);
+  mutationMocks.rewindToMessageAtomically.mockImplementation(async () => {expect(installed).toBe(true);return 1;});
+  mutationMocks.selectRegenerationAtomically.mockImplementation(write);
+  for (const mutate of [
+    () => editMessage(context, ASSISTANT_MESSAGE_ID, "Edited history"),
+    () => rewindConversation(context, ASSISTANT_MESSAGE_ID),
+    () => selectRegeneration(context, ASSISTANT_MESSAGE_ID, null)
+  ]) {
+    installed = false;
+    await mutate();
+  }
+  expect(memorySchemaMocks.ensureConversationMemorySchema).toHaveBeenCalledTimes(3);
 });

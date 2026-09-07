@@ -53,7 +53,7 @@ class ChatBackgroundRepositoryTest {
     @Test
     fun changedSceneUsesSelectedRecentVersionAndIgnoresOldHistory() = runTest {
         val rows = (0 until 120).map { index ->
-            com.example.aichat.core.db.MessageEntity("scene-$index", CONVERSATION_ID, index, "assistant",
+            com.example.aichat.core.db.MessageEntity("scene-$index", CONVERSATION_ID, index, com.example.aichat.core.model.MessageRole.ASSISTANT.name,
                 if (index == 0) "Scene: an ancient castle" else "Just talking.", false, index.toLong(), index.toLong(),
                 if (index == 119) "scene-variant" else null, "SENT")
         }

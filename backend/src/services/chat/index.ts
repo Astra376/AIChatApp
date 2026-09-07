@@ -1,5 +1,6 @@
 import type { RequestContext } from "../../env";
 import { ensureConversationStreamingSchema } from "../../db/ensureConversationStreamingSchema";
+import { ensureConversationMemorySchema } from "../../db/ensureConversationMemorySchema";
 import { getCharacterById, incrementCharacterActivity } from "../../db/queries/characters";
 import {
   claimConversationRun,
@@ -376,6 +377,9 @@ async function requireMutableMessage(context: RequestContext, messageId: string)
   if (!message) throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
   const conversation = await requireOwnedConversation(context, message.conversation_id);
   assertConversationUnlocked(conversation);
+  // The first request after a Worker upgrade can be an edit of old history.
+  // Install invalidation triggers before that write, not in its later summary.
+  await ensureConversationMemorySchema(context.env);
   return message;
 }
 

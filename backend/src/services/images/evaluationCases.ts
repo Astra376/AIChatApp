@@ -46,4 +46,16 @@ export const transparentImageEvaluationCases: EvaluationCase[] = [
     ];
   }))
 ];
-export const imageEvaluationCasesForRun = (run: string) => run.startsWith("transparent_body_") ? transparentImageEvaluationCases : legacyImageEvaluationCases;
+const affordableAlphaCases: EvaluationCase[] = (["photo", "anime"] as const).flatMap(style => [
+  { key: "gpt_medium", model: IMAGE_MODELS.transparent, quality: "medium" as const },
+  { key: "mini_high", model: IMAGE_MODELS.transparentMini, quality: "high" as const },
+  { key: "mini_medium", model: IMAGE_MODELS.transparentMini, quality: "medium" as const }
+].flatMap(tier => {
+  const id = `${style}_${tier.key}`;
+  const settings: ImageInput = { model: tier.model, quality: tier.quality, background: "transparent", aspectRatio: "2:3", prompt: upperBodyPrompt };
+  return [
+    { id, label: `${style} neutral / ${tier.key}`, image: { ...settings, referenceImageUrl: `https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Ftransparent_body_20260907_v1_profile_${style}.jpg` } },
+    { id: `${id}_sad`, label: `${style} sadness / ${tier.key}`, reference: id, image: { ...settings, prompt: expressionPrompt("quiet sadness") } }
+  ];
+}));
+export const imageEvaluationCasesForRun = (run: string) => run.startsWith("affordable_alpha_") ? affordableAlphaCases : run.startsWith("transparent_body_") ? transparentImageEvaluationCases : legacyImageEvaluationCases;

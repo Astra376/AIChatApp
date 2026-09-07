@@ -11,26 +11,26 @@ function wrangler(args, input = "") {
   if (result.status !== 0) throw new Error(`Wrangler ${args[0]} ${args[1]} failed: ${result.stderr || result.stdout}`);
 }
 async function call(path, method = "GET") {
-  const response = await fetch(`${origin}/internal/image-evaluation${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`Evaluation returned ${response.status} for ${path}`);
-  return response.json();
+  for (let attempt = 0; attempt < 21; attempt++) {
+    const response = await fetch(`${origin}/internal/image-evaluation${path}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
+    if (response.status === 404 && attempt < 20) {
+      await response.body?.cancel();
+      // Each fixed case uses the same Durable Object ID, so retrying this
+      // queue/status endpoint cannot submit another paid provider request.
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+      continue;
+    }
+    if (!response.ok) throw new Error(`Evaluation returned ${response.status} for ${path}`);
+    return response.json();
+  }
 }
 const results = new Map();
 let installed = false;
+let transportFailed = false;
 try {
   wrangler(["secret", "put", "IMAGE_EVALUATION_TOKEN"], JSON.stringify({ token, run: manifest.id, expiresAt: Date.now() + 1_800_000 }));
   installed = true;
-  // A new Worker secret can take a short time to reach the responding location.
-  // Only retry this read-only readiness check, never a paid image submission.
-  let ready;
-  for (let attempt = 0; attempt < 16; attempt++) {
-    try { ready = await call(""); break; }
-    catch (error) {
-      if (attempt === 15) throw error;
-      await new Promise(resolve => setTimeout(resolve, 2_000));
-    }
-  }
-  const { cases } = ready;
+  const { cases } = await call("");
   if (cases.length > manifest.maximumCalls || cases.length > 28) throw new Error("Evaluation exceeds its fixed call allowance");
   async function run(spec) {
     if (spec.reference && results.get(spec.reference)?.status !== "completed") {
@@ -56,11 +56,13 @@ try {
     for (let index = 0; index < layer.length; index += 4) {
       const batch = await Promise.allSettled(layer.slice(index, index + 4).map(run));
       for (let i = 0; i < batch.length; i++) if (batch[i].status === "rejected") {
+        transportFailed = true;
         const spec = layer[index + i]; results.set(spec.id, { ...spec, status: "failed", error: String(batch[i].reason) });
         console.log(`${spec.id}: evaluation transport failed`);
       }
     }
   }
+  if (transportFailed) throw new Error("The comparison is incomplete because evaluation transport failed; completed cases remain cached for a safe retry.");
 } finally {
   await writeFile(new URL("results.json", output), JSON.stringify({ run: manifest.id, results: [...results.values()] }, null, 2));
   if (installed) wrangler(["secret", "delete", "IMAGE_EVALUATION_TOKEN"], "y\n");

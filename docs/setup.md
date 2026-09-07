@@ -102,7 +102,7 @@ Fill in these fields:
 - `OPENROUTER_BACKGROUND_MODEL`
   Model for scene and appearance backgrounds
 - `OPENROUTER_PORTRAIT_PREVIEW_MODEL`
-  Nano Banana 2 for supported 512px previews
+  Nano Banana 2 for native 512px stylized previews; realistic previews use FLUX Pro at 512px
 - `OPENROUTER_PORTRAIT_PREMIUM_MODEL`
   Nano Banana Pro for Ultra portrait refinement
 - `R2_PUBLIC_BASE_URL`
@@ -427,6 +427,14 @@ secret, runs only fixed synthetic cases with stable job IDs, saves original outp
 and reported costs as an artifact, then deletes the secret. Repeated polling never
 creates additional images. There is no public arbitrary-prompt evaluation endpoint.
 Backend-only pushes skip the Android build.
+
+The reviewed defaults use FLUX.2 Pro for realistic portraits and Seedream 5.0 Lite
+for stylized portraits. FLUX supports 512px previews but still bills $0.03 per
+image; Seedream rejects 512px and requires at least 2K, so stylized preview choices
+use native 512px Nano Banana 2. The selected preview is passed as an image reference
+for its full-resolution refinement. Klein 9B returned HTTP 404 on OpenRouter, so
+backgrounds use Nano Banana 2. See the actual outputs, editing observations, and
+measured costs in [the image comparison](image-model-evaluation.md).
 
 API references: [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation),
 [image model catalog](https://openrouter.ai/api/v1/images/models).

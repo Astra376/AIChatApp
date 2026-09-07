@@ -59,14 +59,14 @@ describe("generateChatBackground", () => {
 
 describe("portrait identity and uploads", () => {
   it("enhances an owned low-resolution preview using its exact image reference", async () => {
-    const context = { env: { ASSETS: { head: vi.fn(async () => ({key:"preview"})) }, R2_PUBLIC_BASE_URL: "https://worker.example/v1/assets" },
+    const context = { env: { ASSETS: { head: vi.fn(async () => ({key:"preview"})) }, R2_PUBLIC_BASE_URL: "https://worker.example/v1/assets", OPENROUTER_PORTRAIT_REALISTIC_MODEL: "black-forest-labs/flux.2-pro" },
       user: { userId: "user_1" } } as unknown as RequestContext;
     const source = "https://worker.example/v1/assets/portraits%2Fuser_1%2Fpreview.jpg";
     vi.mocked(generateImageWithFallback).mockResolvedValue(image);
     vi.mocked(storeGeneratedImage).mockResolvedValue("https://worker.example/refined.jpg");
     const result = await generateCharacterPortrait(context,"Keep this face",false,source);
     expect(result.avatarUrl).toBe("https://worker.example/refined.jpg");
-    expect(generateImageWithFallback).toHaveBeenCalledWith(context.env,expect.objectContaining({ prompt: expect.stringContaining("Preserve the same face"), referenceImageUrl: source, preview: false }));
+    expect(generateImageWithFallback).toHaveBeenCalledWith(context.env,expect.objectContaining({ model: "google/gemini-3.1-flash-image", prompt: expect.stringContaining("Preserve the same face"), referenceImageUrl: source, preview: false }));
   });
   it("rejects another account's reference before any paid request", async () => {
     vi.clearAllMocks();

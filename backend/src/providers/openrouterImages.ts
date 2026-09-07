@@ -44,6 +44,11 @@ export function imageRequest(input: ImageInput): Record<string, unknown> {
   if (input.model.includes("seedream-5-0-lite")) body.resolution = "2K";
   else if (input.model.startsWith("google/")) body.resolution = input.preview && input.model.includes("flash") ? "512" : "1K";
   if (input.model.startsWith("black-forest-labs/")) body.output_format = "jpeg";
+  // Confirmed by the live capability test: FLUX Pro accepts native 512px images.
+  if (input.preview && input.model === IMAGE_MODELS.realistic) {
+    delete body.aspect_ratio;
+    body.size = "512x512";
+  }
   if (input.size) { delete body.resolution; delete body.aspect_ratio; body.size = input.size; }
   if (input.referenceImageUrl) body.input_references = [{ type: "image_url", image_url: { url: input.referenceImageUrl } }];
   return body;

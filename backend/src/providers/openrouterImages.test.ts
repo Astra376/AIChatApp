@@ -19,6 +19,7 @@ it("uses supported resolutions and a 512px Nano preview", () => {
   expect(imageRequest({ model: IMAGE_MODELS.stylized, prompt: "anime", preview: true })).toMatchObject({ resolution: "2K" });
   expect(imageRequest({ model: IMAGE_MODELS.nano, prompt: "preview", preview: true })).toMatchObject({ resolution: "512" });
   expect(imageRequest({ model: IMAGE_MODELS.realistic, prompt: "photo" })).not.toHaveProperty("resolution");
+  expect(imageRequest({ model: IMAGE_MODELS.realistic, prompt: "photo", preview: true })).toMatchObject({ size: "512x512" });
   expect(portraitStyle("Professional anime illustration")).toBe("stylized");
   expect(portraitStyle("Photorealistic portrait, no anime")).toBe("realistic");
 });

@@ -11,9 +11,9 @@ OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
 OPENROUTER_PROVIDERS = "venice"
 OPENROUTER_ULTRA_MODEL = "deepseek/deepseek-v4-pro-0813"
 OPENROUTER_FALLBACK_MODELS = ""
-# Keep the established quality model until the comparison is reviewed.
-OPENROUTER_PORTRAIT_REALISTIC_MODEL = "google/gemini-3.1-flash-image"
-OPENROUTER_PORTRAIT_STYLIZED_MODEL = "google/gemini-3.1-flash-image"
+# Selected from the actual image comparison in docs/image-model-evaluation.md.
+OPENROUTER_PORTRAIT_REALISTIC_MODEL = "black-forest-labs/flux.2-pro"
+OPENROUTER_PORTRAIT_STYLIZED_MODEL = "bytedance-seed/seedream-5-0-lite"
 OPENROUTER_EXPRESSION_REALISTIC_MODEL = "google/gemini-3.1-flash-image"
 OPENROUTER_EXPRESSION_STYLIZED_MODEL = "google/gemini-3.1-flash-image"
 OPENROUTER_BACKGROUND_MODEL = "google/gemini-3.1-flash-image"

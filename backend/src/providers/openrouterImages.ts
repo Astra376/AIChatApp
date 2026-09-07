@@ -1,20 +1,25 @@
 import type { Env } from "../env";
 import { AppError } from "../lib/errors";
 import { publicAssetUrl } from "../lib/assets";
+import { inspectTransparentPng } from "./transparentPng";
 
 export const IMAGE_MODELS = {
   realistic: "black-forest-labs/flux.2-pro",
-  stylized: "bytedance-seed/seedream-5-0-lite",
+  stylized: "google/gemini-3.1-flash-image",
   background: "black-forest-labs/flux.2-klein-9b",
   nano: "google/gemini-3.1-flash-image",
-  premium: "google/gemini-3-pro-image"
+  premium: "google/gemini-3-pro-image",
+  transparent: "sourceful/riverflow-v2.5-pro",
+  transparentAlternative: "openai/gpt-image-1"
 } as const;
 export type PortraitStyle = "realistic" | "stylized";
 export interface ImageInput {
   model: string;
   prompt: string;
   referenceImageUrl?: string;
-  aspectRatio?: "1:1" | "3:4" | "9:16";
+  aspectRatio?: "1:1" | "3:4" | "2:3" | "9:16";
+  background?: "transparent" | "opaque";
+  quality?: "low" | "medium" | "high";
   preview?: boolean;
   // An explicit size is used only by the bounded capability evaluation.
   size?: string;
@@ -24,6 +29,7 @@ export interface GeneratedImage {
   mediaType: "image/png" | "image/jpeg" | "image/webp";
   model: string;
   cost: number | null;
+  transparency?: { width: number; height: number; clearFraction: number };
 }
 export function portraitStyle(prompt: string): PortraitStyle {
   const positive = prompt.replace(/\b(?:no|not|without)\s+(?:anime|cartoon|illustration|photorealistic)\b/gi, "");
@@ -44,6 +50,16 @@ export function imageRequest(input: ImageInput): Record<string, unknown> {
   if (input.model.includes("seedream-5-0-lite")) body.resolution = "2K";
   else if (input.model.startsWith("google/")) body.resolution = input.preview && input.model.includes("flash") ? "512" : "1K";
   if (input.model.startsWith("black-forest-labs/")) body.output_format = "jpeg";
+  if (input.model.startsWith("sourceful/")) body.resolution = "1K";
+  if (input.quality) body.quality = input.quality;
+  if (input.background === "transparent") {
+    // A PNG extension or a prompt saying "transparent" cannot create an alpha channel.
+    if (![IMAGE_MODELS.transparent, IMAGE_MODELS.transparentAlternative].includes(input.model as typeof IMAGE_MODELS.transparent)) {
+      throw new AppError(503, "IMAGE_ALPHA_UNSUPPORTED", "The character artwork model must support transparent PNG images.");
+    }
+    body.background = "transparent";
+    body.output_format = "png";
+  } else if (input.background && input.model.startsWith("openai/")) body.background = input.background;
   // Confirmed by the live capability test: FLUX Pro accepts native 512px images.
   if (input.preview && input.model === IMAGE_MODELS.realistic) {
     delete body.aspect_ratio;
@@ -61,11 +77,12 @@ function mediaType(bytes: Uint8Array): GeneratedImage["mediaType"] {
 }
 export async function generateImageWithOpenRouter(env: Env, input: ImageInput): Promise<GeneratedImage> {
   if (!env.OPENROUTER_API_KEY?.trim()) throw new AppError(503, "IMAGE_CONFIGURATION", "Image generation is not configured.");
+  const requestBody = imageRequest(input);
   let response: Response;
   try {
     response = await fetch("https://openrouter.ai/api/v1/images", {
       method: "POST", headers: { Authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "X-Title": "Meek" },
-      body: JSON.stringify(imageRequest(input)), signal: AbortSignal.timeout(90_000)
+      body: JSON.stringify(requestBody), signal: AbortSignal.timeout(input.background === "transparent" ? 150_000 : 90_000)
     });
   } catch {
     // Never automatically repeat a submitted paid request after an ambiguous timeout.
@@ -103,20 +120,22 @@ export async function generateImageWithOpenRouter(env: Env, input: ImageInput): 
     for (let index = 0; index < decoded.length; index++) bytes[index] = decoded.charCodeAt(index);
   }
   catch { throw new AppError(502, "IMAGE_INVALID_OUTPUT", "The image provider returned an invalid image."); }
-  return { bytes, mediaType: mediaType(bytes), model: input.model, cost: typeof result.usage?.cost === "number" ? result.usage.cost : null };
+  const transparency = input.background === "transparent" ? inspectTransparentPng(bytes) : undefined;
+  return { bytes, mediaType: mediaType(bytes), model: input.model, cost: typeof result.usage?.cost === "number" ? result.usage.cost : null, ...(transparency ? { transparency } : {}) };
 }
 export async function generateImageWithFallback(env: Env, input: ImageInput): Promise<GeneratedImage> {
   try { return await generateImageWithOpenRouter(env, input); }
   catch (error) {
     // Retry only an explicit provider rejection, keeping the original reference.
-    if (!(error instanceof AppError) || !/^IMAGE_UPSTREAM_(400|404|422|500|502|503)$/.test(error.code) || input.model === IMAGE_MODELS.nano) throw error;
+    if (input.background === "transparent" || !(error instanceof AppError) || !/^IMAGE_UPSTREAM_(400|404|422|500|502|503)$/.test(error.code) || input.model === IMAGE_MODELS.nano) throw error;
     return generateImageWithOpenRouter(env, { ...input, model: IMAGE_MODELS.nano, size: undefined });
   }
 }
 export async function storeGeneratedImage(env: Env, key: string, image: GeneratedImage, style?: PortraitStyle): Promise<string> {
   await env.ASSETS.put(key, image.bytes, {
     httpMetadata: { contentType: image.mediaType, cacheControl: "public, max-age=31536000, immutable" },
-    customMetadata: { model: image.model, ...(style ? { style } : {}), ...(image.cost == null ? {} : { cost: String(image.cost) }) }
+    customMetadata: { model: image.model, ...(style ? { style } : {}), ...(image.cost == null ? {} : { cost: String(image.cost) }),
+      ...(image.transparency ? { alpha: "verified", width: String(image.transparency.width), height: String(image.transparency.height), clearFraction: String(image.transparency.clearFraction) } : {}) }
   });
   return publicAssetUrl(env.R2_PUBLIC_BASE_URL, key);
 }

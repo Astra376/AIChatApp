@@ -37,7 +37,7 @@ try {
       results.set(spec.id, { ...spec, status: "skipped", error: "REFERENCE_FAILED" }); return;
     }
     let result = await call(`/${spec.id}`, "POST");
-    const expires = Date.now() + 150_000;
+    const expires = Date.now() + 200_000;
     while (!["completed", "failed"].includes(result.status) && Date.now() < expires) {
       await new Promise(resolve => setTimeout(resolve, 2_000));
       result = await call(`/${spec.id}`);
@@ -52,7 +52,10 @@ try {
     }
     await writeFile(new URL("results.json", output), JSON.stringify({ run: manifest.id, results: [...results.values()] }, null, 2));
   }
-  for (const layer of [cases.filter(item => !item.reference), cases.filter(item => item.reference)]) {
+  const remaining = new Map(cases.map(item => [item.id, item]));
+  while (remaining.size) {
+    const layer = [...remaining.values()].filter(item => !item.reference || results.has(item.reference));
+    if (!layer.length) throw new Error("Evaluation references contain a cycle or an unknown case");
     for (let index = 0; index < layer.length; index += 4) {
       const batch = await Promise.allSettled(layer.slice(index, index + 4).map(run));
       for (let i = 0; i < batch.length; i++) if (batch[i].status === "rejected") {
@@ -61,6 +64,7 @@ try {
         console.log(`${spec.id}: evaluation transport failed`);
       }
     }
+    for (const spec of layer) remaining.delete(spec.id);
   }
   if (transportFailed) throw new Error("The comparison is incomplete because evaluation transport failed; completed cases remain cached for a safe retry.");
 } finally {

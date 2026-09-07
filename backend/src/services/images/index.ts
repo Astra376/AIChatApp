@@ -22,14 +22,15 @@ export async function generateCharacterPortrait(
   const premium = !preview && await hasUltra(context.env, context.user!.userId);
   let model = portraitModel(context.env, style);
   if (preview && style === "stylized") model = context.env.OPENROUTER_PORTRAIT_PREVIEW_MODEL || IMAGE_MODELS.nano;
-  else if (premium) model = context.env.OPENROUTER_PORTRAIT_PREMIUM_MODEL || IMAGE_MODELS.premium;
+  else if (premium && style === "realistic") model = context.env.OPENROUTER_PORTRAIT_PREMIUM_MODEL || IMAGE_MODELS.premium;
   // Uploaded and pre-migration portraits have no style metadata. Keep their
   // identity with the general reference editor rather than guessing an art style.
   if (sourceAvatarUrl && !referenceStyle && !premium) model = IMAGE_MODELS.nano;
   const image = await generateImageWithFallback(context.env, {
     model, preview, referenceImageUrl: sourceAvatarUrl ?? undefined,
     prompt: [
-      "Square full-bleed character portrait that fills the entire image frame.",
+      "Square full-bleed close-up profile portrait: head and shoulders, face large and clearly readable as a small avatar. Include the entire head and hair with a little breathing room. Not a waist-up or full-body image.",
+      "Include a tasteful fully opaque background appropriate to the character. This is a profile picture, never a transparent cutout.",
       "Do not make a circular avatar, round crop, badge, medallion, border, or framed icon.",
       sourceAvatarUrl ? "Enhance this exact portrait at full resolution. Preserve the same face, identity, pose, composition, clothing and style." : "",
       prompt

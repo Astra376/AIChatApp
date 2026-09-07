@@ -18,7 +18,7 @@ export class ImageGenerationJob {
   constructor(private readonly state: DurableObjectState, private readonly env: Env) {}
   private async recoverSavedImage(job: StoredJob): Promise<ImageJobResult | null> {
     const saved = await this.env.ASSETS.head(job.input.outputKey);
-    if (!saved) return null;
+    if (!saved || (job.input.image.background === "transparent" && saved.customMetadata?.alpha !== "verified")) return null;
     const cost = saved.customMetadata?.cost;
     const result: ImageJobResult = {
       status: "completed", imageUrl: publicAssetUrl(this.env.R2_PUBLIC_BASE_URL, job.input.outputKey),

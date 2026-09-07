@@ -1,7 +1,7 @@
 import type { RequestContext } from "../../env";
 import { assert } from "../../lib/errors";
 import { publicAssetUrl } from "../../lib/assets";
-import { imageEvaluationCases } from "./evaluationCases";
+import { imageEvaluationCasesForRun } from "./evaluationCases";
 import { imageJobStatus, queueImage } from "./jobs";
 
 // Enabled only by an expiring secret installed and removed by the owning CI job.
@@ -15,13 +15,15 @@ export async function evaluateImage(context: RequestContext) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(auth.token), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
   const proof = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(auth.token));
   assert(await crypto.subtle.verify("HMAC", key, proof, new TextEncoder().encode(received)), 404, "NOT_FOUND", "Route not found.");
+  const imageEvaluationCases = imageEvaluationCasesForRun(auth.run);
+  const outputFor = (id: string) => `portraits/image_evaluation/${auth.run}_${id}.${imageEvaluationCases.find(item => item.id === id)?.image.background === "transparent" ? "png" : "jpg"}`;
   if (!context.params.caseId) return { run: auth.run, cases: imageEvaluationCases.map(({ id, label, reference }) => ({ id, label, reference })) };
   const spec = imageEvaluationCases.find(item => item.id === context.params.caseId);
   assert(spec, 404, "NOT_FOUND", "Unknown evaluation case.");
-  const outputKey = `portraits/image_evaluation/${auth.run}_${spec.id}.jpg`;
+  const outputKey = outputFor(spec.id);
   const id = `evaluation_${auth.run}_${spec.id}`;
   if (context.request.method === "POST") {
-    const referenceKey = spec.reference ? `portraits/image_evaluation/${auth.run}_${spec.reference}.jpg` : undefined;
+    const referenceKey = spec.reference ? outputFor(spec.reference) : undefined;
     if (referenceKey) assert(await context.env.ASSETS.head(referenceKey), 409, "REFERENCE_PENDING", "The reference is not ready.");
     await queueImage(context.env, {
       image: { ...spec.image, ...(referenceKey ? { referenceImageUrl: publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, referenceKey) } : {}) },

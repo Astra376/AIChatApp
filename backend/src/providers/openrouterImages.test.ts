@@ -16,7 +16,7 @@ it("uses the dedicated image endpoint and provider-independent routing with imag
   expect(image.mediaType).toBe("image/jpeg"); expect(image.cost).toBe(0.035);
 });
 it("uses supported resolutions and a 512px Nano preview", () => {
-  expect(imageRequest({ model: IMAGE_MODELS.stylized, prompt: "anime", preview: true })).toMatchObject({ resolution: "2K" });
+  expect(imageRequest({ model: IMAGE_MODELS.stylized, prompt: "anime", preview: true })).toMatchObject({ resolution: "512" });
   expect(imageRequest({ model: IMAGE_MODELS.nano, prompt: "preview", preview: true })).toMatchObject({ resolution: "512" });
   expect(imageRequest({ model: IMAGE_MODELS.realistic, prompt: "photo" })).not.toHaveProperty("resolution");
   expect(imageRequest({ model: IMAGE_MODELS.realistic, prompt: "photo", preview: true })).toMatchObject({ size: "512x512" });
@@ -45,4 +45,12 @@ it("writes bytes directly to R2 and records style/model metadata for future expr
   await storeGeneratedImage({ ASSETS: { put }, R2_PUBLIC_BASE_URL: "https://worker.example/v1/assets" } as unknown as Env,
     "portraits/u/p.jpg", {bytes:new Uint8Array([255,216,255,1]),mediaType:"image/jpeg",model:IMAGE_MODELS.stylized,cost:0.035}, "stylized");
   expect(put).toHaveBeenCalledWith("portraits/u/p.jpg",expect.any(Uint8Array),expect.objectContaining({customMetadata:{style:"stylized",model:IMAGE_MODELS.stylized,cost:"0.035"}}));
+});
+it("requires native PNG alpha and does not substitute an opaque fallback", async () => {
+  expect(imageRequest({ model: IMAGE_MODELS.transparent, prompt: "body", background: "transparent", aspectRatio: "2:3" })).toMatchObject({ background: "transparent", output_format: "png", aspect_ratio: "2:3", resolution: "1K" });
+  const fetch = vi.fn().mockResolvedValue(new Response("unsupported", { status: 404 })); vi.stubGlobal("fetch", fetch);
+  await expect(generateImageWithFallback(env, { model: IMAGE_MODELS.transparent, prompt: "body", background: "transparent" })).rejects.toMatchObject({ code: "IMAGE_UPSTREAM_404" });
+  expect(fetch).toHaveBeenCalledOnce();
+  await expect(generateImageWithOpenRouter(env, { model: IMAGE_MODELS.nano, prompt: "body", background: "transparent" })).rejects.toMatchObject({ code: "IMAGE_ALPHA_UNSUPPORTED" });
+  expect(fetch).toHaveBeenCalledOnce();
 });

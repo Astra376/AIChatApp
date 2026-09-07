@@ -6,9 +6,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
@@ -47,11 +44,13 @@ class ChatScreenContentTest {
         )))
         composeRule.setContent { TestChat(state) }
         composeRule.waitForIdle()
-        val directory = requireNotNull(InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir("screenshots"))
-        directory.mkdirs()
-        java.io.File(directory, "chat-dark.png").outputStream().use {
-            composeRule.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
-        }
+        // Connected tests can remove app-owned files during cleanup. Native
+        // screencap writes the fixture to shell storage that CI can still pull.
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(
+                "screencap -p /data/local/tmp/meek-chat-dark.png"
+            )
+        ).use { it.readBytes() }
     }
 
     @Test

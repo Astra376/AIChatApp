@@ -71,7 +71,8 @@ jobs:
           working-directory: android-app
           script: |
             bash -c 'bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER} -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}'
-            adb pull /sdcard/Android/data/com.example.aichat/files/screenshots app/build/reports/screenshots
+            mkdir -p app/build/reports/screenshots
+            adb pull /data/local/tmp/meek-chat-dark.png app/build/reports/screenshots/chat-dark.png
       - name: Keep test reports
         if: always()
         uses: actions/upload-artifact@v4

@@ -65,5 +65,5 @@ it("lists the fixed comparison cases with a valid short-lived credential", async
     params: {}, request: new Request("https://worker/internal/image-evaluation", { headers: { Authorization: `Bearer ${token}` } }) } as unknown as RequestContext;
   const result = await evaluateImage(context);
   expect(result).toMatchObject({ run: "comparison" });
-  expect("cases" in result && result.cases).toHaveLength(25);
+  expect("cases" in result && result.cases).toHaveLength(28);
 });

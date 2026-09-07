@@ -3,7 +3,10 @@ package com.example.aichat
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.luminance
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -38,6 +41,13 @@ class MainActivity : ComponentActivity() {
             val viewModel: AppViewModel = hiltViewModel()
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             AppTheme(themeMode = themeMode) {
+                val darkSystemIcons = MaterialTheme.colorScheme.background.luminance() > 0.5f
+                SideEffect {
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = darkSystemIcons
+                        isAppearanceLightNavigationBars = darkSystemIcons
+                    }
+                }
                 AiChatApp(appViewModel = viewModel, notificationUri = notificationUri, onNotificationConsumed = { notificationUri = null; intent.data = null })
             }
         }

@@ -42,7 +42,7 @@ class ChatScreenContentTest {
             message(0, "How was your day?").copy(role = MessageRole.USER),
             message(1, "*I settle into the chair, smiling.*\n\n\"Better now you're here. How about yours?\"")
         )))
-        composeRule.setContent { TestChat(state) }
+        composeRule.setContent { TestChat(state, themeMode = ThemeMode.DARK) }
         composeRule.waitForIdle()
         // Connected tests can remove app-owned files during cleanup. Native
         // screencap writes the fixture to shell storage that CI can still pull.
@@ -210,10 +210,11 @@ class ChatScreenContentTest {
     private fun TestChat(
         state: ChatUiState,
         onSelectVariant: (ChatMessage, Int) -> Unit = { _, _ -> },
-        onStop: () -> Unit = {}
+        onStop: () -> Unit = {},
+        themeMode: ThemeMode = ThemeMode.LIGHT
     ) {
         val snackbarHostState = remember { SnackbarHostState() }
-        AppTheme(themeMode = ThemeMode.LIGHT) {
+        AppTheme(themeMode = themeMode) {
             ChatScreenContent(
                 paddingValues = PaddingValues(), onBack = {}, onOpenMemory = {},
                 state = state.copy(streamingHaptics = false), snackbarHostState = snackbarHostState,

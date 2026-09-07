@@ -23,7 +23,7 @@ import retrofit2.http.Path
 @Serializable data class ConversationPersonaDto(
     val conversationId: String = "", val mode: String = "auto", val personaId: String? = null,
     val effectiveName: String = "You", val characterDefault: PersonaDetailsDto? = null,
-    val accountName: String = "You", val defaultPersonaId: String? = null
+    val accountName: String = "You", val defaultPersonaId: String? = null, val groupId: String = ""
 )
 interface PersonaApi {
     @GET("v1/personas") suspend fun list(): PersonaLibraryDto
@@ -33,6 +33,10 @@ interface PersonaApi {
     @PATCH("v1/personas/default") suspend fun setDefault(@Body input: Map<String, JsonElement>)
     @GET("v1/conversations/{id}/persona") suspend fun selection(@Path("id") id: String): ConversationPersonaDto
     @PATCH("v1/conversations/{id}/persona") suspend fun select(
+        @Path("id") id: String, @Body input: Map<String, String>
+    ): ConversationPersonaDto
+    @GET("v1/groups/{id}/persona") suspend fun groupSelection(@Path("id") id: String): ConversationPersonaDto
+    @PATCH("v1/groups/{id}/persona") suspend fun selectGroup(
         @Path("id") id: String, @Body input: Map<String, String>
     ): ConversationPersonaDto
 }

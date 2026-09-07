@@ -51,6 +51,23 @@ class ChatBackgroundRepositoryTest {
     }
 
     @Test
+    fun changedSceneUsesSelectedRecentVersionAndIgnoresOldHistory() = runTest {
+        val rows = (0 until 120).map { index ->
+            com.example.aichat.core.db.MessageEntity("scene-$index", CONVERSATION_ID, index, "assistant",
+                if (index == 0) "Scene: an ancient castle" else "Just talking.", false, index.toLong(), index.toLong(),
+                if (index == 119) "scene-variant" else null, "SENT")
+        }
+        database.messageDao().insertAll(rows)
+        database.assistantRegenerationDao().insert(com.example.aichat.core.db.AssistantRegenerationEntity(
+            "scene-variant", "scene-119", "Scene: a quiet beach at sunset", 121))
+        repository.refreshIfSceneChanged(CONVERSATION_ID).getOrThrow()
+        assertThat(imageApi.backgroundRequests.single().prompt).contains("quiet beach")
+        assertThat(imageApi.backgroundRequests.single().prompt).doesNotContain("ancient castle")
+        repository.refreshIfSceneChanged(CONVERSATION_ID).getOrThrow()
+        assertThat(imageApi.backgroundRequests).hasSize(1)
+    }
+
+    @Test
     fun ensureInitialBackground_persistsGeneratedUrlForCharacterAndConversation() = runTest {
         imageApi.backgroundUrl = "https://assets.example/scene.jpg"
 

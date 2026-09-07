@@ -35,6 +35,7 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
     suspend fun create(name: String, ids: List<String>): String {
         val token = epoch.get()
         val result = api.create(CreateGroupRequestDto(name.trim(), ids))
+        if (epoch.get() != token) throw CancellationException("The account changed while creating the group.")
         if (epoch.get() == token) {
             state(result.id).value = GroupChatState(detail = result, loading = false)
             list.update { listOf(result) + it.filterNot { row -> row.id == result.id } }
@@ -123,7 +124,10 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
         scope.launch {
             try {
                 api.stop(id, GroupStopRequestDto(runId))
-                synchronized(operations) { operations[id]?.cancel() }
+                synchronized(operations) {
+                    if (epoch.get() != token || sessions[id] !== target) return@launch
+                    operations[id]?.cancel()
+                }
                 if (epoch.get() == token) target.update { it.copy(sending = false, stopping = false,
                     detail = it.detail?.copy(activeRunId = null, activeRunExpiresAt = null,
                         messages = it.detail.messages.filterNot { m -> m.role == "assistant" && m.content.isBlank() }
@@ -145,9 +149,13 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
     }
     fun reportError(id: String, message: String) { state(id).update { it.copy(error = message) } }
     fun clearError(id: String) { state(id).update { it.copy(error = null) } }
-    fun cancelAllOperations() {
+    fun cancelAllOperations() = synchronized(operations) {
         epoch.incrementAndGet()
-        synchronized(operations) { operations.values.forEach { it.cancel() }; operations.clear() }
+        // Stop requests also belong to the account. Cancel every repository job,
+        // then clear existing observers so no old account's transcript survives.
+        scope.coroutineContext.cancelChildren()
+        operations.clear()
+        sessions.values.forEach { it.value = GroupChatState(loading = false) }
         sessions.clear()
         list.value = emptyList()
     }

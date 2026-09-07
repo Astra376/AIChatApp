@@ -280,7 +280,14 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
                 if (nav.currentBackStackEntry?.id == entry.id) nav.navigate("groups/${Uri.encode(id)}") { popUpTo("groups/create") { inclusive = true }; launchSingleTop = true }
             })
         }
-        composable("groups/{groupId}") { entry -> GroupChatRoute(PaddingValues(), onBack = { nav.backFrom(entry) }) }
+        composable("groups/{groupId}") { entry ->
+            GroupChatRoute(PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenPersonas = {
+                entry.arguments?.getString("groupId")?.let { nav.openFrom(entry, "groups/${Uri.encode(it)}/personas") }
+            })
+        }
+        composable("groups/{groupId}/personas") { entry ->
+            PersonaLibraryRoute(onBack = { nav.backFrom(entry) }, groupId = entry.arguments?.getString("groupId"), onSelect = { nav.backFrom(entry) })
+        }
     }
 }
 

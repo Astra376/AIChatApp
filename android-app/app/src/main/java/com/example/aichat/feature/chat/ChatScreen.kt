@@ -1324,7 +1324,11 @@ private fun VariantMessagePager(
 
     LaunchedEffect(pagerState, variants.size, hasGenerationPage, generationRequestEnabled) {
         snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }.collect { (page, isScrollInProgress) ->
-            if (isScrollInProgress || synchronizingPage || !variantControlsEnabled) return@collect
+            if (isScrollInProgress) return@collect
+            // Generation locks interactions, but its visible page must still own
+            // the measured height as newly streamed lines arrive.
+            settledVisualPage = page.coerceIn(0, pageCount - 1)
+            if (synchronizingPage || !variantControlsEnabled) return@collect
             when {
                 page == generationPage && hasGenerationPage -> {
                     settledVisualPage = page

@@ -119,7 +119,7 @@ export async function generateEmotionPortraits(context: RequestContext, id: stri
   // Claims persist across Worker isolates. An interrupted generation becomes retryable after three minutes.
   const claimed: string[] = [];
   for (const emotion of portraitEmotions) {
-    const row = await context.env.DB.prepare(`INSERT INTO character_emotion_portraits(character_id,emotion,source_url,status,updated_at) VALUES (?,?,?,'generating',?) ON CONFLICT(character_id,emotion) DO UPDATE SET source_url=excluded.source_url,image_url=NULL,job_json=NULL,status='generating',updated_at=excluded.updated_at WHERE source_url != excluded.source_url OR status='failed' OR (status='generating' AND updated_at < ?) RETURNING emotion`)
+    const row = await context.env.DB.prepare(`INSERT INTO character_emotion_portraits(character_id,emotion,source_url,status,updated_at) VALUES (?,?,?,'generating',?) ON CONFLICT(character_id,emotion) DO UPDATE SET source_url=excluded.source_url,image_url=NULL,job_json=NULL,status='generating',updated_at=excluded.updated_at WHERE source_url != excluded.source_url OR status='failed' OR (status='generating' AND updated_at < ? AND (job_json IS NULL OR job_json='claiming')) RETURNING emotion`)
       .bind(id, emotion, source, Date.now(), Date.now() - 180_000).first();
     if (row) claimed.push(emotion);
   }

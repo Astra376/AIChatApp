@@ -4,11 +4,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso.pressBack
 import com.example.aichat.core.design.AppTheme
 import com.example.aichat.core.model.ThemeMode
@@ -57,7 +60,11 @@ class CreateSheetTest {
 
     @Test fun tappingOutside_dismissesWithoutOpeningACreator() {
         show()
-        composeRule.onNodeWithContentDescription("Close sheet").performClick()
+        // The scrim spans the whole window. Its centre is behind the sheet,
+        // so tap its exposed upper area to exercise real outside dismissal.
+        composeRule.onNodeWithContentDescription("Close sheet").performTouchInput {
+            click(Offset(center.x, 48.dp.toPx()))
+        }
         composeRule.onNodeWithText("Character").assertDoesNotExist()
         composeRule.runOnIdle {
             assertEquals(emptyList<String>(), opened)

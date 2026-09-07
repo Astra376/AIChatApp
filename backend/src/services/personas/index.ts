@@ -2,6 +2,7 @@ import type { Env, RequestContext } from "../../env";
 import { assert } from "../../lib/errors";
 import { createId } from "../../lib/ids";
 import { requireString } from "../../lib/validation";
+import { ensureGroupSchema } from "../../db/ensureGroupSchema";
 
 export interface PersonaInput { name: string; backstory: string; appearance: string; pronouns: string }
 export interface Persona extends PersonaInput { id: string; createdAt: number; updatedAt: number }
@@ -27,6 +28,23 @@ export function ensurePersonaSchema(env: Env): Promise<void> {
     pending = env.DB.batch(schema.map(sql => env.DB.prepare(sql))).then(() => undefined)
       .catch(error => { ready.delete(env.DB); throw error; });
     ready.set(env.DB, pending);
+  }
+  return pending;
+}
+
+const groupReady = new WeakMap<D1Database, Promise<void>>();
+async function ensureGroupPersonaSchema(env: Env): Promise<void> {
+  let pending = groupReady.get(env.DB);
+  if (!pending) {
+    pending = (async () => {
+      await ensurePersonaSchema(env);
+      await ensureGroupSchema(env);
+      await env.DB.prepare(`CREATE TABLE IF NOT EXISTS group_personas (
+        group_id TEXT PRIMARY KEY REFERENCES chat_groups(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL CHECK(mode IN ('auto','account','personal')),
+        persona_id TEXT REFERENCES user_personas(id) ON DELETE SET NULL)`).run();
+    })().catch(error => { groupReady.delete(env.DB); throw error; });
+    groupReady.set(env.DB,pending);
   }
   return pending;
 }
@@ -90,11 +108,14 @@ export async function deletePersona(context: RequestContext, personaId: string):
   const {env} = context, userId = context.user!.userId;
   await ensurePersonaSchema(env);
   await ownedPersona(env,userId,personaId);
+  await ensureGroupPersonaSchema(env);
   await env.DB.batch([
     // Explicit account fallback prevents deleting a persona from silently adopting a creator's identity.
     env.DB.prepare(`UPDATE conversation_personas SET mode = 'account', persona_id = NULL WHERE persona_id = ?
       AND conversation_id IN (SELECT id FROM conversations WHERE owner_user_id = ?)` ).bind(personaId,userId),
     env.DB.prepare("DELETE FROM user_persona_preferences WHERE user_id = ? AND persona_id = ?").bind(userId,personaId),
+    env.DB.prepare(`UPDATE group_personas SET mode = 'account', persona_id = NULL WHERE persona_id = ?
+      AND group_id IN (SELECT id FROM chat_groups WHERE owner_user_id = ?)`).bind(personaId,userId),
     env.DB.prepare("DELETE FROM user_personas WHERE id = ? AND user_id = ?").bind(personaId,userId)
   ]);
 }
@@ -155,6 +176,62 @@ export async function selectConversationPersona(context: RequestContext, convers
     ON CONFLICT(conversation_id) DO UPDATE SET mode=excluded.mode,persona_id=excluded.persona_id`)
     .bind(conversationId,mode,mode === "personal" ? personaId : null).run();
   return getConversationPersona(context,conversationId);
+}
+
+async function ownedGroup(env: Env, groupId: string, userId: string): Promise<void> {
+  const row = await env.DB.prepare("SELECT id FROM chat_groups WHERE id = ? AND owner_user_id = ?")
+    .bind(groupId,userId).first<{id:string}>();
+  assert(row,404,"GROUP_NOT_FOUND","This group is no longer available.");
+}
+export async function getGroupPersona(context: RequestContext, groupId: string) {
+  const {env} = context, userId = context.user!.userId;
+  await ensureGroupPersonaSchema(env);
+  await ownedGroup(env,groupId,userId);
+  const [selection, library] = await Promise.all([
+    env.DB.prepare("SELECT mode,persona_id FROM group_personas WHERE group_id = ?").bind(groupId).first<SelectionRow>(),
+    listPersonas(context)
+  ]);
+  const mode = selection?.mode ?? "auto";
+  const persona = mode === "personal" ? library.items.find(p => p.id === selection?.persona_id)
+    : mode === "auto" ? library.items.find(p => p.id === library.defaultPersonaId) : null;
+  return {groupId, mode, personaId: mode === "personal" ? persona?.id ?? null : null,
+    effectiveName: persona?.name ?? library.accountName, characterDefault: null,
+    accountName: library.accountName, defaultPersonaId: library.defaultPersonaId};
+}
+export async function selectGroupPersona(context: RequestContext, groupId: string, input: unknown) {
+  assert(input !== null && typeof input === "object" && !Array.isArray(input),400,"INVALID_PERSONA","Choose your identity for this group.");
+  const {mode,personaId} = input as Record<string,unknown>;
+  assert(mode === "auto" || mode === "account" || mode === "personal",400,"INVALID_PERSONA","Choose your identity for this group.");
+  const {env} = context, userId = context.user!.userId;
+  await ensureGroupPersonaSchema(env);
+  await ownedGroup(env,groupId,userId);
+  if (mode === "personal") {
+    assert(typeof personaId === "string",400,"INVALID_PERSONA","Choose a persona.");
+    await ownedPersona(env,userId,personaId);
+  }
+  await env.DB.prepare(`INSERT INTO group_personas(group_id,mode,persona_id) VALUES (?,?,?)
+    ON CONFLICT(group_id) DO UPDATE SET mode=excluded.mode,persona_id=excluded.persona_id`)
+    .bind(groupId,mode,mode === "personal" ? personaId : null).run();
+  return getGroupPersona(context,groupId);
+}
+export async function resolveGroupPersonaPrompt(env: Env, ownerUserId: string, groupId: string): Promise<string> {
+  await ensureGroupPersonaSchema(env);
+  const row = await env.DB.prepare(`SELECT
+    CASE WHEN choice.mode='account' THEN NULL WHEN choice.mode='personal' THEN selected.name ELSE defaults.name END AS name,
+    CASE WHEN choice.mode='account' THEN '' WHEN choice.mode='personal' THEN selected.backstory ELSE defaults.backstory END AS backstory,
+    CASE WHEN choice.mode='account' THEN '' WHEN choice.mode='personal' THEN selected.appearance ELSE defaults.appearance END AS appearance,
+    CASE WHEN choice.mode='account' THEN '' WHEN choice.mode='personal' THEN selected.pronouns ELSE defaults.pronouns END AS pronouns,
+    profile.display_name AS account_name
+    FROM chat_groups g LEFT JOIN profiles profile ON profile.user_id=g.owner_user_id
+    LEFT JOIN group_personas choice ON choice.group_id=g.id
+    LEFT JOIN user_personas selected ON selected.id=choice.persona_id AND selected.user_id=g.owner_user_id
+    LEFT JOIN user_persona_preferences preference ON preference.user_id=g.owner_user_id
+    LEFT JOIN user_personas defaults ON defaults.id=preference.persona_id AND defaults.user_id=g.owner_user_id
+    WHERE g.id=? AND g.owner_user_id=?`).bind(groupId,ownerUserId)
+    .first<{name:string|null;backstory:string|null;appearance:string|null;pronouns:string|null;account_name:string|null}>();
+  assert(row,404,"GROUP_NOT_FOUND","This group is no longer available.");
+  return personaPrompt(row.name ? {name:row.name,backstory:row.backstory??"",appearance:row.appearance??"",pronouns:row.pronouns??""} : null,
+    row.account_name?.trim() || "You");
 }
 export function personaPrompt(persona: PersonaInput | null, name: string): string {
   const identity: PersonaInput = persona ? {name:persona.name,backstory:persona.backstory,appearance:persona.appearance,pronouns:persona.pronouns}

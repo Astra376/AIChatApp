@@ -186,7 +186,7 @@ class ChatRepository @Inject constructor(
                 combine(
                     characterDao.observeById(conversation.characterId),
                     messageDao.observeNewestMessages(conversationId, messageLimit),
-                    regenerationDao.observeConversationRegenerations(conversationId),
+                    regenerationDao.observeNewestRegenerations(conversationId, messageLimit),
                     conversationSceneDao.observeByConversation(conversationId)
                 ) { character, messages, regenerations, scene ->
                     if (character == null) return@combine null
@@ -458,12 +458,8 @@ class ChatRepository @Inject constructor(
 
     suspend fun rewind(messageId: String): Result<Unit> = mutateMessage(messageId) { message ->
         val conversation = conversationDao.getById(message.conversationId)
-        val removed = messageDao.getMessages(message.conversationId).filter {
-            it.position > message.position || it.sendState != MessageSendState.SENT.name
-        }
-        val removedIds = removed.map { it.id }.toSet()
-        val removedRegenerations = regenerationDao.getConversationRegenerations(message.conversationId)
-            .filter { it.messageId in removedIds }
+        val removed = messageDao.getMessagesRemovedByRewind(message.conversationId, message.position)
+        val removedRegenerations = regenerationDao.getRemovedByRewind(message.conversationId, message.position)
         database.withTransaction {
             messageDao.deleteAfter(message.conversationId, message.position)
             deleteLocalOnlyMessages(message.conversationId)

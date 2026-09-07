@@ -109,12 +109,12 @@ class ChatBackgroundRepository @Inject constructor(
                     val conversation = conversationDao.getById(conversationId) ?: return@withTransaction null
                     val character =
                         database.characterDao().getById(conversation.characterId) ?: return@withTransaction null
+                    // Scene detection uses six recent messages. Read only that window
+                    // and its selected alternatives, even in very long conversations.
+                    val recent = database.messageDao().getRecentCommittedMessages(conversationId, 6).asReversed()
                     val regenerations = database.assistantRegenerationDao()
-                        .getConversationRegenerations(conversationId)
-                        .groupBy { it.messageId }
-                    val messages = database.messageDao().getMessages(conversationId).map { entity ->
-                        entity.toModel(regenerations[entity.id].orEmpty())
-                    }
+                        .getByMessages(recent.map { it.id }).groupBy { it.messageId }
+                    val messages = recent.map { entity -> entity.toModel(regenerations[entity.id].orEmpty()) }
                     Triple(character.toModel(), messages, sceneDao.getByConversation(conversationId))
                 } ?: return@withLock
 

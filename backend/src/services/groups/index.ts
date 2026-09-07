@@ -5,7 +5,7 @@ import { RequestDeadline } from "../../lib/deadline";
 import { createId } from "../../lib/ids";
 import { streamChatText } from "../../providers/openrouter";
 import { resolveAutomaticModel } from "../chat/modelPolicy";
-import { resolveUserPersonaPrompt } from "../personas";
+import { resolveGroupPersonaPrompt } from "../personas";
 import { getNotificationSettings } from "../notifications";
 import { chooseGroupSpeakers, groupCharacterContext, type GroupCharacter, type GroupTrigger } from "./router";
 import { claimGroupContinuation, claimGroupSend, groupCharacters, insertGroupReply, persistGroupReply,
@@ -31,12 +31,12 @@ async function runGroup(env: Env, group: GroupRecord, runId: string, trigger: Gr
   const deadline = new RequestDeadline(20_000, 80_000, abort.signal);
   let partial: {id: string; content: string} | undefined;
   try {
-    const transcript = await recentGroupMessages(env, group.id);
-    const [speakers, identity, continuity] = await Promise.all([
+    const transcript = await deadline.run(recentGroupMessages(env, group.id));
+    const [speakers, identity, continuity] = await deadline.run(Promise.all([
       chooseGroupSpeakers(env, characters, transcript, trigger, deadline.signal),
-      resolveUserPersonaPrompt(env, group.owner_user_id),
+      resolveGroupPersonaPrompt(env, group.owner_user_id, group.id),
       groupMemoryContext(env, group, characters, transcript)
-    ]);
+    ]));
     deadline.touch();
     const latestUser = [...transcript].reverse().find(message => message.role === "user")?.content ?? "";
     const policy = await resolveAutomaticModel(env, group.owner_user_id, `group:${group.id}`, latestUser, group.user_turn,
@@ -84,9 +84,14 @@ async function runGroup(env: Env, group: GroupRecord, runId: string, trigger: Gr
     }
     await stopGroupRun(env, group.id, runId);
     emit({type: "done", runId});
-    await consolidateGroupMemory(env, group.id, characters);
+    // Continuity is background work. Its failure cannot turn an already completed
+    // reply into a second, contradictory terminal event.
+    await consolidateGroupMemory(env, group.id, characters).catch(() => {});
   } catch (error) {
     const cancelled = abort.signal.aborted || error instanceof AppError && error.code === "GROUP_STOPPED";
+    // A terminal event means the caller can act immediately. Persist the partial
+    // and release the lease before a client responds to the error by reloading.
+    await stopGroupRun(env, group.id, runId, partial).catch(() => {});
     emit({type: "error", runId, code: cancelled ? "GROUP_STOPPED" : error instanceof AppError ? error.code : "GROUP_INTERRUPTED",
       message: cancelled ? "Reply stopped." : error instanceof AppError ? error.message : "The group reply was interrupted. You can continue the chat."});
   } finally {

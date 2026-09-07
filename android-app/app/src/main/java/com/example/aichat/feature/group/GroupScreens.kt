@@ -243,7 +243,7 @@ fun CreateGroupRoute(paddingValues: PaddingValues, onBack: () -> Unit, onCreated
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, viewModel: GroupChatViewModel = hiltViewModel()) {
+fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, onOpenPersonas: () -> Unit = {}, viewModel: GroupChatViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val input by viewModel.input.collectAsStateWithLifecycle()
     val haptics by viewModel.haptics.collectAsStateWithLifecycle()
@@ -317,6 +317,7 @@ fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, viewModel: 
                     Text(character.name, style = MaterialTheme.typography.titleMedium)
                 }
             }
+            TextButton(onClick = { showGroupInfo = false; onOpenPersonas() }) { Text("Your persona") }
             TextButton(onClick = { showGroupInfo = false; confirmDelete = true }, enabled = !deleting) { Text("Delete group", color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(12.dp))
         }

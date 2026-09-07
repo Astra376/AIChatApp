@@ -42,6 +42,7 @@ import retrofit2.Retrofit
     private val _state = MutableStateFlow(State())
     val state = _state.asStateFlow()
     private var conversationId: String? = null
+    private var groupId: String? = null
     private var loaded = false
     var editing by mutableStateOf(savedState.get<Boolean>("persona.editing") ?: false); private set
     var editId by mutableStateOf(savedState.get<String>("persona.id") ?: ""); private set
@@ -50,11 +51,17 @@ import retrofit2.Retrofit
     var appearance by mutableStateOf(savedState.get<String>("persona.appearance") ?: ""); private set
     var pronouns by mutableStateOf(savedState.get<String>("persona.pronouns") ?: ""); private set
 
-    fun bind(id: String?) { if (!loaded || conversationId != id) { loaded = true; conversationId = id; refresh() } }
+    fun bind(id: String?, group: String? = null) {
+        if (!loaded || conversationId != id || groupId != group) {
+            loaded = true; conversationId = id; groupId = group; refresh()
+        }
+    }
+    private suspend fun loadSelection(): ConversationPersonaDto? = groupId?.let { api.groupSelection(it) }
+        ?: conversationId?.let { api.selection(it) }
     fun refresh() = operation {
         val result = coroutineScope {
             val library = async { api.list() }
-            val selection = async { conversationId?.let { api.selection(it) } }
+            val selection = async { loadSelection() }
             library.await() to selection.await()
         }
         _state.value = _state.value.copy(library = result.first, selection = result.second, loading = false)
@@ -95,10 +102,10 @@ import retrofit2.Retrofit
         onSaved(result.id)
     }
     fun select(mode: String, id: String?, onSelected: () -> Unit) = operation {
-        conversationId?.let { chatId ->
+        (groupId ?: conversationId)?.let { chatId ->
             val request = mutableMapOf("mode" to mode)
             if (id != null) request["personaId"] = id
-            _state.value = _state.value.copy(selection = api.select(chatId, request))
+            _state.value = _state.value.copy(selection = if (groupId != null) api.selectGroup(chatId, request) else api.select(chatId, request))
             _state.value.selection?.let(identity::remember)
         }
         onSelected()
@@ -108,7 +115,7 @@ import retrofit2.Retrofit
         api.setDefault(mapOf("personaId" to (id?.let(::JsonPrimitive) ?: JsonNull)))
         _state.value = _state.value.copy(library = _state.value.library.copy(defaultPersonaId = id))
         identity.rememberLibrary(_state.value.library)
-        conversationId?.let { _state.value = _state.value.copy(selection = api.selection(it)) }
+        _state.value = _state.value.copy(selection = loadSelection())
         _state.value.selection?.let(identity::remember)
     }
     fun delete(id: String) = operation {
@@ -117,7 +124,7 @@ import retrofit2.Retrofit
         _state.value = _state.value.copy(library = library.copy(items = library.items.filterNot { it.id == id },
             defaultPersonaId = library.defaultPersonaId?.takeUnless { it == id }))
         identity.rememberLibrary(_state.value.library)
-        conversationId?.let { _state.value = _state.value.copy(selection = api.selection(it)) }
+        _state.value = _state.value.copy(selection = loadSelection())
         _state.value.selection?.let(identity::remember)
     }
     private fun operation(action: suspend () -> Unit) {
@@ -137,16 +144,18 @@ import retrofit2.Retrofit
     onBack: () -> Unit,
     onSelect: ((String?) -> Unit)? = null,
     conversationId: String? = null,
+    groupId: String? = null,
     modifier: Modifier = Modifier,
     startCreating: Boolean = false,
     model: PersonaLibraryViewModel = hiltViewModel()
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     var deleting by remember { mutableStateOf<PersonaDto?>(null) }
-    LaunchedEffect(conversationId) { model.bind(conversationId) }
+    LaunchedEffect(conversationId, groupId) { model.bind(conversationId, groupId) }
     LaunchedEffect(startCreating) { if (startCreating) model.beginCreate() }
     BackHandler(enabled = model.editing) { model.closeEditor() }
     val choose: (String, String?) -> Unit = { mode, id -> model.select(mode, id) { onSelect?.invoke(id) } }
+    val choosingForChat = conversationId != null || groupId != null
     ScreenBackgroundBox(modifier = modifier) {
         LazyColumn(
             Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding(),
@@ -172,14 +181,14 @@ import retrofit2.Retrofit
                 } }
             } else {
                 item {
-                    Text(if (conversationId == null) "Create different identities for your stories. Only you can see these personas."
+                    Text(if (!choosingForChat) "Create different identities for your stories. Only you can see these personas."
                         else "You are ${state.selection?.effectiveName ?: state.library.accountName} in this chat. Changes apply to future replies.",
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 item { Button(onClick = model::beginCreate, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Create persona") } }
                 if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                if (conversationId != null && !state.loading) {
-                    item { PersonaChoice("Chat default", state.selection?.characterDefault?.name ?: "Your default persona or account name",
+                if (choosingForChat && !state.loading) {
+                    item { PersonaChoice(if (groupId != null) "Your default persona" else "Chat default", state.selection?.characterDefault?.name ?: "Your default persona or account name",
                         state.selection?.mode == "auto", !state.busy) { choose("auto", null) } }
                     item { PersonaChoice(state.library.accountName, "Use your account identity", state.selection?.mode == "account", !state.busy) { choose("account", null) } }
                 } else if (!state.loading && onSelect == null) {
@@ -194,7 +203,7 @@ import retrofit2.Retrofit
                                     Text(persona.name, style = MaterialTheme.typography.titleMedium)
                                     if (persona.pronouns.isNotBlank()) Text(persona.pronouns, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                if (conversationId != null || onSelect != null) RadioButton(
+                                if (choosingForChat || onSelect != null) RadioButton(
                                     selected = state.selection?.mode == "personal" && state.selection?.personaId == persona.id,
                                     onClick = { choose("personal", persona.id) }, enabled = !state.busy
                                 )

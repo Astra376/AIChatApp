@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import type { Env, RequestContext } from "../../env";
 import { characterDefaultPersonaStatement, deletePersona, ensurePersonaSchema, getConversationPersona, listPersonas,
   resolveConversationPersonaPrompt, resolveUserPersonaPrompt, savePersona, selectConversationPersona, setDefaultPersona,
-  validatePersonaInput } from "./index";
+  validatePersonaInput, getGroupPersona, selectGroupPersona, resolveGroupPersonaPrompt } from "./index";
+import { ensureGroupSchema } from "../../db/ensureGroupSchema";
 
 function setup() {
   const db = new DatabaseSync(":memory:");
@@ -109,6 +110,52 @@ describe("private user personas",()=>{
       await expect(savePersona(context(),{name:"Overflow"})).rejects.toMatchObject({code:"PERSONA_LIMIT"});
       expect((await savePersona(context(),{name:"Edited"},"persona0")).name).toBe("Edited");
       expect((await savePersona(context("other"),{name:"Allowed"})).name).toBe("Allowed");
+    }finally{db.close();}
+  });
+  it("lets each group override the global persona without inheriting a member character's preset identity",async()=>{
+    const {db,env,context}=setup();try{
+      await ensureGroupSchema(env);
+      db.exec("INSERT INTO chat_groups(id,owner_user_id,name,created_at,updated_at) VALUES ('group','user','Friends',1,1)");
+      const global=await savePersona(context(),{name:"Global Scout"});
+      const selected=await savePersona(context(),{name:"River",pronouns:"they/them",backstory:"The group's navigator"});
+      await setDefaultPersona(context(),global.id);
+      await characterDefaultPersonaStatement(env,"character",{name:"Not the group identity"}).run();
+      expect((await getGroupPersona(context(),"group")).effectiveName).toBe("Global Scout");
+      expect(await resolveGroupPersonaPrompt(env,"user","group")).toContain('"name":"Global Scout"');
+      await selectGroupPersona(context(),"group",{mode:"personal",personaId:selected.id});
+      expect((await getGroupPersona(context(),"group")).effectiveName).toBe("River");
+      const prompt=await resolveGroupPersonaPrompt(env,"user","group");
+      expect(prompt).toContain('"name":"River"');expect(prompt).toContain('"pronouns":"they/them"');
+      expect(prompt).not.toContain("Not the group identity");
+      await selectGroupPersona(context(),"group",{mode:"account"});
+      expect(await resolveGroupPersonaPrompt(env,"user","group")).toContain('"name":"Alex"');
+      await selectGroupPersona(context(),"group",{mode:"auto"});
+      expect(await resolveGroupPersonaPrompt(env,"user","group")).toContain('"name":"Global Scout"');
+    }finally{db.close();}
+  });
+  it("rejects group identity reads and writes across owners and disallows another user's persona",async()=>{
+    const {db,env,context}=setup();try{
+      await ensureGroupSchema(env);
+      db.exec("INSERT INTO chat_groups(id,owner_user_id,name,created_at,updated_at) VALUES ('group','user','Friends',1,1)");
+      const foreign=await savePersona(context("other"),{name:"Private identity"});
+      await expect(getGroupPersona(context("other"),"group")).rejects.toMatchObject({code:"GROUP_NOT_FOUND"});
+      await expect(selectGroupPersona(context("other"),"group",{mode:"account"})).rejects.toMatchObject({code:"GROUP_NOT_FOUND"});
+      await expect(resolveGroupPersonaPrompt(env,"other","group")).rejects.toMatchObject({code:"GROUP_NOT_FOUND"});
+      await expect(selectGroupPersona(context(),"group",{mode:"personal",personaId:foreign.id})).rejects.toMatchObject({code:"PERSONA_NOT_FOUND"});
+      await expect(selectGroupPersona(context(),"group",{mode:"character"})).rejects.toMatchObject({code:"INVALID_PERSONA"});
+    }finally{db.close();}
+  });
+  it("returns a group to account identity when its persona is deleted and cascades group deletion",async()=>{
+    const {db,env,context}=setup();try{
+      await ensureGroupSchema(env);
+      db.exec("INSERT INTO chat_groups(id,owner_user_id,name,created_at,updated_at) VALUES ('group','user','Friends',1,1)");
+      const persona=await savePersona(context(),{name:"Scout"});
+      await selectGroupPersona(context(),"group",{mode:"personal",personaId:persona.id});
+      await deletePersona(context(),persona.id);
+      expect(await getGroupPersona(context(),"group")).toMatchObject({mode:"account",personaId:null,effectiveName:"Alex"});
+      expect(await resolveGroupPersonaPrompt(env,"user","group")).toContain('"name":"Alex"');
+      db.exec("DELETE FROM chat_groups WHERE id='group'");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM group_personas").get()?.count).toBe(0);
     }finally{db.close();}
   });
 });

@@ -104,6 +104,26 @@ class ChatScreenContentTest {
     }
 
     @Test
+    fun streamingRegeneration_growsBeyondThePreviousReplyHeightWhileControlsAreLocked() {
+        val assistant = message(1, "Short original")
+        val chatState = mutableStateOf(ChatUiState(conversation = conversationDetail(listOf(assistant))))
+        composeRule.setContent { TestChat(chatState.value) }
+        val originalHeight = composeRule.onNodeWithText("Short original").fetchSemanticsNode().boundsInRoot.height
+        val regenerated = (1..6).joinToString("\n") { "Regenerated line $it" }
+
+        composeRule.runOnIdle {
+            chatState.value = chatState.value.copy(activeStream = stream(regenerated).copy(
+                mode = ActiveStreamMode.REGENERATE,
+                targetMessageId = assistant.id
+            ))
+        }
+        composeRule.waitForIdle()
+
+        val streamingHeight = composeRule.onNodeWithText(regenerated).fetchSemanticsNode().boundsInRoot.height
+        assertTrue("A locked generation page must expand instead of clipping new lines", streamingHeight > originalHeight * 2)
+    }
+
+    @Test
     fun activeReply_revealsReceivedTextBeforeCompletion() {
         composeRule.mainClock.autoAdvance = false
         val chatState = mutableStateOf(ChatUiState(

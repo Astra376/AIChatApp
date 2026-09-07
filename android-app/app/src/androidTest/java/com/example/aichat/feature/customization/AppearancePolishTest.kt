@@ -34,11 +34,19 @@ class AppearancePolishTest {
         // Capture the Compose surface directly. A shell screen capture can catch
         // the test activity's Android window transition even after Compose is idle.
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val file = java.io.File(instrumentation.targetContext.cacheDir, "appearance-polish.png")
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
-        file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
-        android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
-            "sh -c 'run-as com.example.aichat cat cache/appearance-polish.png > /data/local/tmp/meek-appearance-dark.png'"
-        )).use { it.readBytes() }
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            val pipes = instrumentation.uiAutomation.executeShellCommandRw("dd of=/data/local/tmp/meek-appearance-dark.png")
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(pipes[0]).use { output ->
+                android.os.ParcelFileDescriptor.AutoCloseOutputStream(pipes[1]).use { input ->
+                    check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, input))
+                }
+                output.readBytes()
+            }
+        } else {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
+                "screencap -p /data/local/tmp/meek-appearance-dark.png"
+            )).use { it.readBytes() }
+        }
     }
 }

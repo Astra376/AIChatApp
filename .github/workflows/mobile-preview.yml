@@ -44,6 +44,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
       - uses: android-actions/setup-android@v3
       - name: Install Android platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
@@ -68,7 +70,7 @@ jobs:
           disable-animations: true
           working-directory: android-app
           script: |
-            bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
+            bash -c 'bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER} -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}'
             adb pull /sdcard/Android/data/com.example.aichat/files/screenshots app/build/reports/screenshots
       - name: Keep test reports
         if: always()

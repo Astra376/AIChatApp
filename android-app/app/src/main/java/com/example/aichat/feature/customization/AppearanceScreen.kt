@@ -126,9 +126,51 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
         AlertDialog(onDismissRequest={if(!busy) generationTarget=null},title={Text("Imagine your ${if(target=="profile") "profile background" else target}")},text={Column { OutlinedTextField(value=prompt,onValueChange={prompt=it.take(1200)},label={Text("Describe the image")},minLines=3); Text("Up to 10 generated images each day.",style=MaterialTheme.typography.bodySmall) }},confirmButton={TextButton(onClick={viewModel.generate(context,target,prompt);generationTarget=null;prompt=""},enabled=prompt.trim().length>=8&&!busy) { Text("Generate") }},dismissButton={TextButton(onClick={generationTarget=null}) { Text("Cancel") }})
     }
 }
-@Composable private fun ChoiceRow(title: String, choices: List<String>,selected: String,enabled: Boolean,onChoose: (String)->Unit) {
-    Column { Text(title,style=MaterialTheme.typography.labelLarge); LazyRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) { items(choices) { item -> FilterChip(selected=item==selected,onClick={onChoose(item)},enabled=enabled,label={Text(item.replaceFirstChar(Char::uppercase))}) } } }
+@Composable
+private fun ChoiceRow(
+    title: String,
+    choices: List<String>,
+    selected: String,
+    enabled: Boolean,
+    onChoose: (String) -> Unit
+) {
+    Column {
+        Text(title, style = MaterialTheme.typography.labelLarge)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(choices) { item ->
+                FilterChip(
+                    selected = item == selected,
+                    onClick = { onChoose(item) },
+                    enabled = enabled,
+                    label = { Text(item.replaceFirstChar(Char::uppercase)) }
+                )
+            }
+        }
+    }
 }
-@Composable private fun ImageActions(title: String,busy: Boolean,onUpload: ()->Unit,onGenerate: ()->Unit,onClear: (() -> Unit)? = null) {
-    Column { Text(title,style=MaterialTheme.typography.labelLarge); Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick=onUpload,enabled=!busy) { Text("Upload") }; OutlinedButton(onClick=onGenerate,enabled=!busy) { Text("Generate") }; onClear?.let { TextButton(onClick=it,enabled=!busy) { Text("Remove") } } }
+
+@Composable
+private fun ImageActions(
+    title: String,
+    busy: Boolean,
+    onUpload: () -> Unit,
+    onGenerate: () -> Unit,
+    onClear: (() -> Unit)? = null
+) {
+    Column {
+        Text(title, style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onUpload, enabled = !busy) {
+                Text("Upload")
+            }
+            OutlinedButton(onClick = onGenerate, enabled = !busy) {
+                Text("Generate")
+            }
+            onClear?.let { clear ->
+                TextButton(onClick = clear, enabled = !busy) {
+                    Text("Remove")
+                }
+            }
+        }
+    }
 }

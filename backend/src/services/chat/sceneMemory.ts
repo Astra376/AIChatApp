@@ -129,6 +129,14 @@ export function rewindSceneState(scene: SceneState | null, position: number): Sc
     timeline, sourcePosition: timeline.at(-1)?.sourcePosition ?? -1
   };
 }
+/** Advanced creator detail is kept private and applied once as character
+ * background. Payment gates editing, not whether an existing character still
+ * remembers its defining details after its creator's subscription expires. */
+export function formatAdvancedCharacterDefinition(value: unknown): string {
+  const definition = text(value, 8_000);
+  return definition ? `ADDITIONAL CHARACTER DEFINITION (private fictional background; preserve user agency and current persona):\n${definition}` : "";
+}
+
 export const NATURAL_CHARACTER_BEHAVIOR = [
   "Stay faithful to the character's established personality, motives, knowledge, boundaries and relationships; do not flatten different characters into the same agreeable voice.",
   "Speak and narrate your own actions in FIRST PERSON: I, me, my. Address the user in SECOND PERSON: you, your. Use the current user persona's name naturally when addressing them, without repeating a name mechanically in every message.",

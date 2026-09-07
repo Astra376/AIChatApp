@@ -11,6 +11,8 @@ import { chooseGroupSpeakers, groupCharacterContext, type GroupCharacter, type G
 import { claimGroupContinuation, claimGroupSend, groupCharacters, insertGroupReply, persistGroupReply,
   recentGroupMessages, requireGroup, stopGroupRun, toGroupMessage, type GroupMessageRecord, type GroupRecord } from "./storage";
 
+import { consolidateGroupMemory, groupMemoryContext } from "./memory";
+
 type Emit = (event: Record<string, unknown>) => void;
 // The database lease fences runs across Worker isolates; this controller also
 // stops provider work immediately when the stop request hits the same isolate.
@@ -30,9 +32,10 @@ async function runGroup(env: Env, group: GroupRecord, runId: string, trigger: Gr
   let partial: {id: string; content: string} | undefined;
   try {
     const transcript = await recentGroupMessages(env, group.id);
-    const [speakers, identity] = await Promise.all([
+    const [speakers, identity, continuity] = await Promise.all([
       chooseGroupSpeakers(env, characters, transcript, trigger, deadline.signal),
-      resolveUserPersonaPrompt(env, group.owner_user_id)
+      resolveUserPersonaPrompt(env, group.owner_user_id),
+      groupMemoryContext(env, group, characters, transcript)
     ]);
     deadline.touch();
     const latestUser = [...transcript].reverse().find(message => message.role === "user")?.content ?? "";
@@ -47,7 +50,7 @@ async function runGroup(env: Env, group: GroupRecord, runId: string, trigger: Gr
         reasoning: policy.reasoningEnabled, status: policy.reasoningEnabled ? "Considering" : null});
       let persistedAt = Date.now();
       // The second speaker sees the first speaker's actual message, not a script.
-      for await (const chunk of streamChatText(policy.env, groupCharacterContext(character, characters, transcript, identity), deadline.signal,
+      for await (const chunk of streamChatText(policy.env, groupCharacterContext(character, characters, transcript, `${identity}\n${continuity.prompts[character.id]}`, continuity.shortTermLimit), deadline.signal,
         {reasoning: policy.reasoning, maxTokens: policy.maxTokens})) {
         deadline.touch();
         partial.content += chunk;
@@ -81,6 +84,7 @@ async function runGroup(env: Env, group: GroupRecord, runId: string, trigger: Gr
     }
     await stopGroupRun(env, group.id, runId);
     emit({type: "done", runId});
+    await consolidateGroupMemory(env, group.id, characters);
   } catch (error) {
     const cancelled = abort.signal.aborted || error instanceof AppError && error.code === "GROUP_STOPPED";
     emit({type: "error", runId, code: cancelled ? "GROUP_STOPPED" : error instanceof AppError ? error.code : "GROUP_INTERRUPTED",
@@ -130,7 +134,7 @@ export async function sendGroupMessage(context: RequestContext, id: string, user
     await runGroup(context.env, claim.group, claim.runId, "user", characters, emit);
   });
 }
-export async function continueGroup(context: RequestContext, id: string, trigger: "continue" | "typing") {
+export async function continueGroup(context: RequestContext, id: string, trigger: "continue" | "typing" | "quiet") {
   const group = await requireGroup(context, id);
   const characters = await groupCharacters(context.env, group);
   const runId = await claimGroupContinuation(context.env, group, trigger);

@@ -129,10 +129,12 @@ export async function claimGroupContinuation(env: Env, group: GroupRecord, trigg
       ${trigger === "continue" ? "" : "AND COALESCE(last_autonomy_anchor_id, '') != last_user_message_id"}
       AND last_autonomy_at <= ?
       ${trigger === "typing" ? "AND typing_started_at <= ? AND typing_at >= ?" : ""}
-      ${trigger === "away" ? "AND last_seen_at <= ? AND last_user_at >= ?" : ""}`)
-    .bind(runId, now + 90_000, now, group.id, now, group.last_user_message_id, now - (trigger === "away" ? 6 * 3_600_000 : trigger === "typing" ? 60_000 : 5_000),
+      ${trigger === "away" ? "AND last_seen_at <= ? AND last_user_at >= ?" : ""}
+      ${trigger === "quiet" ? "AND last_seen_at >= ? AND updated_at <= ? AND typing_at IS NULL" : ""}`)
+    .bind(runId, now + 90_000, now, group.id, now, group.last_user_message_id, now - (trigger === "away" ? 6 * 3_600_000 : trigger === "typing" || trigger === "quiet" ? 60_000 : 5_000),
       ...(trigger === "typing" ? [now - 30_000, now - 20_000] : []),
-      ...(trigger === "away" ? [now - 15 * 60_000, now - 7 * 86_400_000] : [])).run();
+      ...(trigger === "away" ? [now - 15 * 60_000, now - 7 * 86_400_000] : []),
+      ...(trigger === "quiet" ? [now - 20_000, now - 60_000] : [])).run();
   return claim.meta.changes ? runId : null;
 }
 

@@ -20,7 +20,7 @@ class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { preferences ->
-        preferences[THEME_MODE]?.let(ThemeMode::valueOf) ?: ThemeMode.DARK
+        preferences[THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.DARK
     }
 
     val streamingHaptics: Flow<Boolean> = context.dataStore.data.map { it[STREAMING_HAPTICS] ?: true }

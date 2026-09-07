@@ -34,6 +34,7 @@ import com.example.aichat.core.network.GroupMessageDto
 import com.example.aichat.core.ui.ScreenBackgroundBox
 import com.example.aichat.feature.chat.formatRoleplayText
 import com.example.aichat.feature.chat.rememberTypedStreamText
+import com.example.aichat.feature.chat.ReasoningStatusWord
 import com.example.aichat.feature.home.HomeRepository
 import com.example.aichat.feature.profile.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -120,6 +121,17 @@ class GroupChatViewModel @Inject constructor(private val repository: GroupReposi
     fun continueChat() { repository.continueChat(groupId) }
     fun stop() { repository.stop(groupId) }
     fun clearError() { repository.clearError(groupId) }
+    val deleting = MutableStateFlow(false)
+    fun delete(onDeleted: () -> Unit) {
+        if (deleting.value) return
+        deleting.value = true
+        viewModelScope.launch {
+            try { repository.delete(groupId); onDeleted() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { repository.reportError(groupId, "Couldn't delete the group. Try again.") }
+            finally { deleting.value = false }
+        }
+    }
     fun older() { viewModelScope.launch { repository.older(groupId) } }
     fun refresh() { viewModelScope.launch { repository.refresh(groupId) } }
     suspend fun visibleSession() = coroutineScope {
@@ -138,7 +150,13 @@ class GroupChatViewModel @Inject constructor(private val repository: GroupReposi
         }
         while (isActive) {
             delay(if (state.value.busy) 1_500 else 15_000)
-            if (!state.value.sending) repository.refresh(groupId)
+            if (!state.value.sending && state.value.detail != null) repository.refresh(groupId)
+            val last = state.value.detail?.messages?.lastOrNull()
+            val anchor = state.value.detail?.messages?.lastOrNull { it.role == "user" }?.id
+            if (anchor != null && saved.get<String>("quietAnchor") != anchor && !state.value.busy && input.value.isBlank()
+                && last?.role == "assistant" && System.currentTimeMillis() - last.createdAt > 60_000) {
+                if (repository.continueChat(groupId, idle = true)) saved["quietAnchor"] = anchor
+            }
         }
     }
 }
@@ -229,6 +247,9 @@ fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, viewModel: 
     val state by viewModel.state.collectAsStateWithLifecycle()
     val input by viewModel.input.collectAsStateWithLifecycle()
     val haptics by viewModel.haptics.collectAsStateWithLifecycle()
+    val deleting by viewModel.deleting.collectAsStateWithLifecycle()
+    var showGroupInfo by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -250,7 +271,7 @@ fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, viewModel: 
         Scaffold(modifier = Modifier.padding(paddingValues), containerColor = MaterialTheme.colorScheme.background,
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = { Column { GroupTopBar(state.detail?.name ?: "Group chat", onBack,
-                actions = { if (state.detail != null) TextButton(onClick = viewModel::continueChat, enabled = !state.busy) { Text("Continue") } })
+                onTitleClick = { showGroupInfo = true }, actions = { if (state.detail != null) TextButton(onClick = viewModel::continueChat, enabled = !state.busy) { Text("Continue") } })
                 if (state.detail != null) Text(state.detail!!.characters.joinToString { it.name }, Modifier.padding(start = 20.dp, end = 20.dp, bottom = 6.dp),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Box(Modifier.fillMaxWidth().height(14.dp).background(Brush.verticalGradient(listOf(MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.background.copy(alpha = 0f)))))
@@ -280,17 +301,34 @@ fun GroupChatRoute(paddingValues: PaddingValues, onBack: () -> Unit, viewModel: 
                         Text("Choosing a reply", style = MaterialTheme.typography.labelMedium)
                     }
                 }
-                items(messages.asReversed(), key = { it.id }) { message -> GroupMessage(message, haptics) }
+                items(messages.asReversed(), key = { it.id }) { message -> GroupMessage(message, haptics, state.reasoning && message.id == messages.lastOrNull()?.id) }
                 if (state.detail?.nextBeforePosition != null) item("older") { TextButton(onClick = viewModel::older, enabled = !state.loadingOlder,
                     modifier = Modifier.fillMaxWidth()) { Text(if (state.loadingOlder) "Loading…" else "Earlier messages") } }
                 if (messages.isEmpty()) item("empty") { Text("Say hello to the group.", Modifier.fillMaxWidth().padding(vertical = 20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
     }
+    if (showGroupInfo) ModalBottomSheet(onDismissRequest = { showGroupInfo = false }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(state.detail?.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
+            state.detail?.characters.orEmpty().forEach { character ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CharacterPortrait(name = character.name, avatarUrl = character.avatarUrl, modifier = Modifier.size(42.dp))
+                    Text(character.name, style = MaterialTheme.typography.titleMedium)
+                }
+            }
+            TextButton(onClick = { showGroupInfo = false; confirmDelete = true }, enabled = !deleting) { Text("Delete group", color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+    if (confirmDelete) AlertDialog(onDismissRequest = { if (!deleting) confirmDelete = false },
+        title = { Text("Delete this group?") }, text = { Text("This removes the group and its messages. The characters stay in your library.") },
+        confirmButton = { TextButton(onClick = { viewModel.delete { confirmDelete = false; onBack() } }, enabled = !deleting) { Text(if (deleting) "Deleting…" else "Delete") } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }, enabled = !deleting) { Text("Cancel") } })
 }
 
 @Composable
-private fun GroupMessage(message: GroupMessageDto, haptics: Boolean) {
+private fun GroupMessage(message: GroupMessageDto, haptics: Boolean, reasoning: Boolean) {
     val own = message.role == "user"
     val displayed = rememberTypedStreamText(if (message.status == "streaming") message.id else null, message.content,
         animate = message.status == "streaming", hapticsEnabled = haptics)
@@ -302,7 +340,8 @@ private fun GroupMessage(message: GroupMessageDto, haptics: Boolean) {
         }
         Surface(shape = RoundedCornerShape(18.dp), color = if (own) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
             modifier = Modifier.widthIn(max = 340.dp)) {
-            Text(if (displayed.isEmpty()) androidx.compose.ui.text.AnnotatedString("…") else formatRoleplayText(displayed),
+            if (reasoning && displayed.isBlank()) ReasoningStatusWord(Modifier.padding(horizontal = 14.dp, vertical = 11.dp))
+            else Text(if (displayed.isEmpty()) androidx.compose.ui.text.AnnotatedString("…") else formatRoleplayText(displayed),
                 Modifier.padding(horizontal = 14.dp, vertical = 11.dp), style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface)
         }
@@ -311,8 +350,8 @@ private fun GroupMessage(message: GroupMessageDto, haptics: Boolean) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GroupTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
-    TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge) },
+private fun GroupTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}, onTitleClick: (() -> Unit)? = null) {
+    TopAppBar(title = { Text(title, modifier = Modifier.clickable(enabled = onTitleClick != null) { onTitleClick?.invoke() }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge) },
         navigationIcon = { IconButton(onClick = onBack) { AppIcon(AppIcons.back, "Back") } }, actions = actions,
         expandedHeight = 52.dp, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
 }

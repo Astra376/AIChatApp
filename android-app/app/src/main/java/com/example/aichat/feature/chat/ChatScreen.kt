@@ -179,9 +179,8 @@ class ChatViewModel @Inject constructor(
     val events = _events.asSharedFlow()
 
     val uiState: StateFlow<ChatUiState> = combine(
-        loadedMessageLimit.flatMapLatest { limit ->
-            chatRepository.observeConversation(conversationId, limit)
-        },
+        combine(loadedMessageLimit, authRepository.sessionState) { limit, session -> limit to session.profile?.userId.orEmpty() }
+            .flatMapLatest { (limit, owner) -> chatRepository.observeConversation(conversationId, limit, owner) },
         chatRepository.observeActiveStream(conversationId),
         combine(composerText, isStartingNewChat, chatRepository.observeMutationBusy(conversationId), settingsRepository.streamingHaptics) { composer, startingNewChat, mutating, haptics ->
             ComposerState(composer, startingNewChat, mutating, haptics)
@@ -191,7 +190,7 @@ class ChatViewModel @Inject constructor(
     ) { conversation, activeStream, composerState, identity, messageCount ->
         ChatUiState(
             conversation = conversation,
-            activeStream = activeStream,
+            activeStream = activeStream.takeIf { conversation != null },
             composerText = composerState.text,
             currentUserName = identity.second ?: identity.first.profile?.displayName ?: "You",
             currentUserAvatarUrl = identity.first.profile?.avatarUrl,

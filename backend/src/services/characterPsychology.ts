@@ -1,3 +1,4 @@
+import { requireUltra } from "./billing";
 import { getCharacterDefaultPersona } from "./personas";
 import type { Env, RequestContext } from "../env";
 import { AppError, assert } from "../lib/errors";
@@ -10,6 +11,7 @@ import { publicAssetUrl } from "../lib/assets";
 export const emotionKeys = ["trust", "affection", "stress", "energy", "openness", "joy", "sadness", "anger", "fear", "curiosity", "jealousy", "hope", "loneliness", "shame", "pride", "guilt"] as const;
 export const personalityKeys = ["warmth", "confidence", "playfulness", "formality", "assertiveness", "volatility", "resilience", "adaptability"] as const;
 export interface CharacterPsychologyDefaults {
+  advancedDefinition: string;
   emotions: Record<string, number | string>;
   personality: Record<string, number | string>;
   psychology: { cornerstone: string; beliefs: string[]; desires: string[]; secretDesires: string[]; lifeStory: string; dailyLife: string; relationships: string; significantEvents: string[] };
@@ -39,16 +41,26 @@ export function normalizeCharacterPsychology(input: unknown): CharacterPsycholog
     const value = source[key]; return [key, typeof value === "number" && Number.isFinite(value) ? Math.round(Math.max(0, Math.min(100, value))) : fallback];
   }));
   return {
+    advancedDefinition: text(root.advancedDefinition, 8000),
     emotions: { ...scores(em, emotionKeys, 30), mood: text(em.mood, 100) || "Grounded", reason: text(em.reason, 500) },
     personality: { ...scores(pe, personalityKeys, 50), description: text(pe.description, 1500) },
     psychology: { cornerstone: text(ps.cornerstone, 1200), beliefs: lines(ps.beliefs), desires: lines(ps.desires), secretDesires: lines(ps.secretDesires), lifeStory: text(ps.lifeStory, 8000), dailyLife: text(ps.dailyLife), relationships: text(ps.relationships), significantEvents: lines(ps.significantEvents) },
     defaultPersona: { name: text(persona.name, 80), backstory: text(persona.backstory, 4000) }
   };
 }
-export async function characterPsychologyStatement(env: Env, characterId: string, input: unknown) {
+export async function characterPsychologyStatement(env: Env, characterId: string, input: unknown, ownerId?: string) {
   await ensureCharacterPsychologySchema(env);
+  const previous = await getCharacterPsychologyDefaults(env, characterId);
+  const value = normalizeCharacterPsychology(input);
+  const raw = object(input);
+  if (raw.advancedDefinition === undefined && previous) value.advancedDefinition = previous.advancedDefinition;
+  assert(typeof raw.advancedDefinition !== "string" || raw.advancedDefinition.length <= 8000, 400, "ADVANCED_DEFINITION_LIMIT", "Ultra character detail is limited to 8,000 characters.");
+  if (value.advancedDefinition !== (previous?.advancedDefinition ?? "")) {
+    assert(ownerId, 403, "ULTRA_REQUIRED", "Advanced character detail requires Ultra.");
+    await requireUltra(env, ownerId, "Advanced character detail");
+  }
   return env.DB.prepare(`INSERT INTO character_psychology (character_id, defaults_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(character_id) DO UPDATE SET defaults_json = excluded.defaults_json, updated_at = excluded.updated_at`)
-    .bind(characterId, JSON.stringify({ ...normalizeCharacterPsychology(input), defaultPersona: { name: "", backstory: "" } }), Date.now());
+    .bind(characterId, JSON.stringify({ ...value, defaultPersona: { name: "", backstory: "" } }), Date.now());
 }
 export async function getCharacterPsychologyDefaults(env: Env, characterId: string): Promise<CharacterPsychologyDefaults | null> {
   await ensureCharacterPsychologySchema(env);
@@ -69,8 +81,8 @@ export async function readCharacterPsychology(context: RequestContext, id: strin
 }
 export async function saveCharacterPsychology(context: RequestContext, id: string, value: unknown) {
   await visibleCharacter(context, id, true);
-  await (await characterPsychologyStatement(context.env, id, value)).run();
-  return normalizeCharacterPsychology(value);
+  await (await characterPsychologyStatement(context.env, id, value, context.user!.userId)).run();
+  return getCharacterPsychologyDefaults(context.env, id);
 }
 export async function autoCreateCharacter(context: RequestContext, idea: string) {
   await ensureCharacterPsychologySchema(context.env);
@@ -98,8 +110,11 @@ export async function readEmotionPortraits(context: RequestContext, id: string) 
 export async function generateEmotionPortraits(context: RequestContext, id: string) {
   const character = await visibleCharacter(context, id, true);
   const source = character.avatar_url;
-  const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/`);
-  assert(source?.startsWith(prefix), 400, "PORTRAIT_REQUIRED", "Choose a generated or uploaded portrait first.");
+  const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/reference.jpg`).slice(0, -"reference.jpg".length);
+  assert(typeof source === "string" && source.startsWith(prefix), 400, "PORTRAIT_REQUIRED", "Choose a generated or uploaded portrait first.");
+  const filename = source.slice(prefix.length);
+  assert(/^[a-zA-Z0-9_-]+\.jpg$/.test(filename) && await context.env.ASSETS.head(`portraits/${context.user!.userId}/${filename}`),
+    400, "PORTRAIT_REQUIRED", "Choose one of your saved portraits first.");
   await ensureCharacterPsychologySchema(context.env);
   // Claims persist across Worker isolates. An interrupted generation becomes retryable after three minutes.
   const claimed: string[] = [];

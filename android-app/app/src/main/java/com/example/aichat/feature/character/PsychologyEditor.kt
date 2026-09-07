@@ -67,7 +67,7 @@ fun PsychologySection(title: String, initiallyExpanded: Boolean = false, content
 fun PsychologyRadar(scores: List<Pair<String, Int>>, onChange: (String, Int) -> Unit, enabled: Boolean = true) {
     val accent = MaterialTheme.colorScheme.primary
     val grid = MaterialTheme.colorScheme.outlineVariant
-    val values = scores.take(8)
+    val values = scores.take(16)
     val update by rememberUpdatedState(onChange)
     val latestValues by rememberUpdatedState(values)
     fun changePoint(point: Offset, width: Float, height: Float) {
@@ -102,7 +102,7 @@ fun PsychologyRadar(scores: List<Pair<String, Int>>, onChange: (String, Int) -> 
         path.close(); drawPath(path,accent.copy(alpha=.16f)); drawPath(path,accent,style=Stroke(2.dp.toPx()))
         values.forEachIndexed { index, pair -> drawCircle(accent,4.dp.toPx(),point(index,pair.second.coerceIn(0,100)/100f)) }
     }
-    Text(values.joinToString(" · ") { it.first }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text("Clockwise from top: " + values.joinToString(" · ") { it.first }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
@@ -152,10 +152,21 @@ fun PsychologyText(label: String, value: String, enabled: Boolean = true, limit:
         modifier=Modifier.fillMaxWidth(),minLines=2,maxLines=6,shape=RoundedCornerShape(16.dp))
 }
 @Composable
-fun CharacterPsychologyEditor(value: CharacterPsychologyDefaultsDto, enabled: Boolean = true, onChange: (CharacterPsychologyDefaultsDto) -> Unit) {
+fun CharacterPsychologyEditor(value: CharacterPsychologyDefaultsDto, enabled: Boolean = true,
+    isUltra: Boolean = false, onUpgradeUltra: () -> Unit = {}, onChange: (CharacterPsychologyDefaultsDto) -> Unit) {
     PsychologySection("Mind & life",true) { MindEditor(value.psychology,enabled) { onChange(value.copy(psychology=it)) } }
     PsychologySection("Personality") { PersonalityEditor(value.personality,enabled) { onChange(value.copy(personality=it)) } }
     PsychologySection("Default emotions") { EmotionEditor(value.emotions,enabled) { onChange(value.copy(emotions=it)) } }
+    PsychologySection("Ultra · Advanced character detail") {
+        Text("Shape their inner conflicts, attachment patterns, growth arcs, nuanced boundaries and dialogue examples with 8,000 extra characters.",style=MaterialTheme.typography.bodySmall)
+        if (isUltra || value.advancedDefinition.isNotBlank()) PsychologyText("Advanced direction",value.advancedDefinition,enabled && isUltra,8000) {
+            onChange(value.copy(advancedDefinition=it))
+        }
+        if (!isUltra) {
+            if (value.advancedDefinition.isNotBlank()) Text("Your character's existing detail is preserved.",style=MaterialTheme.typography.bodySmall)
+            Button(onClick=onUpgradeUltra) { Text("Unlock with Ultra") }
+        }
+    }
     PsychologySection("The user's role in this story") {
         Text("Leave this blank to use their own name or selected persona.",style=MaterialTheme.typography.bodySmall)
         PsychologyText("Default name",value.defaultPersona.name,enabled,80) { onChange(value.copy(defaultPersona=value.defaultPersona.copy(name=it))) }

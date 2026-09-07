@@ -70,6 +70,7 @@ data class CharacterDefaultPersonaDto(val name: String = "", val backstory: Stri
 
 @Serializable
 data class CharacterPsychologyDefaultsDto(
+    val advancedDefinition: String = "",
     val emotions: CharacterEmotionDto = CharacterEmotionDto(trust = 50, affection = 30, stress = 15, energy = 50, openness = 50),
     val personality: CharacterPersonalityDto = CharacterPersonalityDto(warmth = 50, confidence = 50, playfulness = 50, formality = 50),
     val psychology: CharacterPsychologyDto = CharacterPsychologyDto(),

@@ -197,6 +197,7 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
             CharacterStudioRoute(
                 paddingValues = PaddingValues(), ownerUserId = ownerUserId,
                 onBack = { nav.backFrom(entry) },
+                onUpgradeUltra = { nav.openFrom(entry, "ultra") },
                 onCreated = { id ->
                     if (nav.currentBackStackEntry?.id == entry.id) {
                         nav.navigate("chat/${Uri.encode(id)}") { popUpTo("main_tabs"); launchSingleTop = true }
@@ -207,6 +208,7 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
         composable("edit-character/{characterId}") { entry ->
             CharacterStudioRoute(paddingValues = PaddingValues(), ownerUserId = ownerUserId,
                 characterId = entry.arguments?.getString("characterId"), onBack = { nav.backFrom(entry) },
+                onUpgradeUltra = { nav.openFrom(entry, "ultra") },
                 onCreated = { nav.backFrom(entry) })
         }
         composable("chat/{conversationId}") { entry ->

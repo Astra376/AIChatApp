@@ -43,7 +43,7 @@ export function parseCharacterVisibility(value: string): CharacterWriteInput["vi
 export async function createOwnedCharacter(context: RequestContext, input: CharacterWriteInput) {
   const id = createId("character");
   const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, id, input.voiceId, input.visibility)] : [];
-  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, id, input.psychologyDefaults));
+  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, id, input.psychologyDefaults, context.user!.userId));
   if (input.defaultPersona !== undefined) {
     await ensurePersonaSchema(context.env);
     voiceStatements.push(characterDefaultPersonaStatement(context.env, id, emptyPersonaToNull(input.defaultPersona)));
@@ -75,7 +75,7 @@ export async function updateOwnedCharacter(context: RequestContext, characterId:
   }
 
   const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, characterId, input.voiceId, input.visibility)] : [];
-  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, characterId, input.psychologyDefaults));
+  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, characterId, input.psychologyDefaults, context.user!.userId));
   if (input.defaultPersona !== undefined) {
     await ensurePersonaSchema(context.env);
     voiceStatements.push(characterDefaultPersonaStatement(context.env, characterId, emptyPersonaToNull(input.defaultPersona)));

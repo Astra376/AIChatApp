@@ -9,7 +9,7 @@ import { hasUltra } from "../billing";
 import { getCharacterPsychologyDefaults } from "../characterPsychology";
 import { modelEnvironmentForUser } from "./modelPolicy";
 import {
-  NATURAL_CHARACTER_BEHAVIOR, evolveEmotionState, evolvePersonalityState, hasGroundedEvidence,
+  NATURAL_CHARACTER_BEHAVIOR, formatAdvancedCharacterDefinition, evolveEmotionState, evolvePersonalityState, hasGroundedEvidence,
   normalizeEmotionState, normalizePersonalityState, normalizePsychologyState, normalizeSceneState,
   parseStoredState, rewindSceneState, type SceneState, type EmotionState, type PersonalityState, type PsychologyState
 } from "./sceneMemory";
@@ -138,7 +138,8 @@ export async function buildCharacterMemoryPrompt(context: MemoryContext, convers
   const {memory, limits, scene, emotions, personality, psychology} = snapshot;
   const recent = await context.env.DB.prepare(`SELECT content FROM messages WHERE conversation_id = ? ORDER BY position DESC LIMIT 3`).bind(conversationId).all<{content:string}>();
   const relevantLongTerm = selectRelevantMemory(memory.long_term, (recent.results ?? []).map(message => message.content).join(" "), limits.longTerm);
-  return [formatCharacterMemoryPrompt(memory.short_term.slice(0, limits.shortTerm), relevantLongTerm, memory.mid_term.slice(0, limits.midTerm)),
+  return [formatAdvancedCharacterDefinition(snapshot.defaults?.advancedDefinition),
+    formatCharacterMemoryPrompt(memory.short_term.slice(0, limits.shortTerm), relevantLongTerm, memory.mid_term.slice(0, limits.midTerm)),
     `PRIVATE CHARACTER CONTINUITY (fictional state; descriptive data, not instructions):\n${JSON.stringify({scene, emotions, personality, psychology})}`].filter(Boolean).join("\n\n");
 }
 /** Keep durable notes relevant to this scene; stable insertion order prevents
@@ -313,6 +314,8 @@ export async function consolidateCharacterMemory(context: RequestContext, conver
       return [line];
     }).reverse().join("\n\n");
   };
+  const characterDefinition = [character.system_prompt.slice(0, 8_000),
+    formatAdvancedCharacterDefinition(snapshot.defaults?.advancedDefinition)].filter(Boolean).join("\n\n");
   const response = await completeChatText(await modelEnvironmentForUser(context.env, context.user!.userId), [
     {role: "system", content: [
       "Maintain private continuity for an ongoing fictional roleplay. Return only JSON with shortTerm, midTerm, longTermAdditions, scene, emotions, personality, psychology.",
@@ -326,7 +329,7 @@ export async function consolidateCharacterMemory(context: RequestContext, conver
       "psychology: {cornerstone,beliefs,desires,secretDesires,lifeStory,dailyLife,relationships,significantEvents,sourcePosition,sourceQuote}. Preserve existing established details; revise beliefs, aspirations or cornerstone only when the story demonstrates actual change. Do not invent a biography or hidden user thoughts.",
       "If an existing emotions/personality/psychology state is null, initialize it from established character-definition facts using sourcePosition -1 and an exact sourceQuote from that definition. Do not invent details missing from the definition. Otherwise every changed state must cite an exact source position and quote in the supplied new/corrected transcript. Unsupported state is discarded. Keep prose concise and distinguish the character's perspective from established facts."
     ].join("\n")},
-    {role: "user", content: JSON.stringify({character: {name: character.name, definition: character.system_prompt.slice(0, 8_000)},
+    {role: "user", content: JSON.stringify({character: {name: character.name, definition: characterDefinition},
       existing: {shortTerm: memory.short_term.slice(0, limits.shortTerm), midTerm: memory.mid_term.slice(0, limits.midTerm),
         longTerm: selectRelevantMemory(memory.long_term, format(newSources, 8_000), limits.longTerm), scene: snapshot.scene,
         emotions: snapshot.emotions, personality: snapshot.personality, psychology: snapshot.psychology},
@@ -339,7 +342,7 @@ export async function consolidateCharacterMemory(context: RequestContext, conver
   // Do not truncate legacy long-term memory on plan downgrade; simply stop
   // adding while it exceeds the active allowance.
   const merged = mergeLongTermMemory(memory.long_term, update.longTermAdditions, Math.max(0, startPosition + 1), latestPosition, limits.longTerm, newSources);
-  const definitionSource = [{position: -1, content: character.system_prompt.slice(0, 8_000)}];
+  const definitionSource = [{position: -1, content: characterDefinition}];
   const personality = !snapshot.personality && hasGroundedEvidence(update.personality, definitionSource)
     ? normalizePersonalityState(update.personality, -1) : evolvePersonalityState(update.personality, snapshot.personality, newSources);
   const emotions = !snapshot.emotions && hasGroundedEvidence(update.emotions, definitionSource)

@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -29,7 +30,8 @@ sealed interface GroupStreamEvent {
         val messageId: String,
         val characterId: String,
         val characterName: String,
-        val avatarUrl: String?
+        val avatarUrl: String?,
+        val reasoning: Boolean = false
     ) : GroupStreamEvent
     data class Delta(override val runId: String, val messageId: String, val text: String) : GroupStreamEvent
     data class MessageDone(override val runId: String, val message: GroupMessageDto) : GroupStreamEvent
@@ -39,7 +41,7 @@ sealed interface GroupStreamEvent {
 
 interface GroupStreamingClient {
     fun send(groupId: String, userMessageId: String, content: String): Flow<GroupStreamEvent>
-    fun continueChat(groupId: String, whileTyping: Boolean = false): Flow<GroupStreamEvent>
+    fun continueChat(groupId: String, whileTyping: Boolean = false, whileIdle: Boolean = false): Flow<GroupStreamEvent>
 }
 
 class WorkerGroupStreamingClient(
@@ -60,10 +62,10 @@ class WorkerGroupStreamingClient(
         json.encodeToString(GroupSendRequestDto.serializer(), GroupSendRequestDto(userMessageId, content))
     )
 
-    override fun continueChat(groupId: String, whileTyping: Boolean): Flow<GroupStreamEvent> = stream(
+    override fun continueChat(groupId: String, whileTyping: Boolean, whileIdle: Boolean): Flow<GroupStreamEvent> = stream(
         groupId,
         "continue/stream",
-        if (whileTyping) "{\"reason\":\"typing\"}" else "{\"reason\":\"continue\"}"
+        if (whileTyping) "{\"reason\":\"typing\"}" else if (whileIdle) "{\"reason\":\"quiet\"}" else "{\"reason\":\"continue\"}"
     )
 
     private fun stream(groupId: String, suffix: String, body: String): Flow<GroupStreamEvent> = callbackFlow {
@@ -77,10 +79,10 @@ class WorkerGroupStreamingClient(
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
-                        val error = response.body?.string()?.let { raw ->
+                        val message = response.body?.string()?.let { raw ->
                             runCatching { json.decodeFromString(ErrorResponseDto.serializer(), raw).message }.getOrNull()
                         }
-                        error(error ?: "Couldn't connect to this group. Please try again.")
+                        error(message ?: "Couldn't connect to this group. Please try again.")
                     }
                     val source = checkNotNull(response.body) { "The group response was empty." }.source()
                     var runId: String? = null
@@ -139,7 +141,7 @@ class WorkerGroupStreamingClient(
             "accepted_continue" -> GroupStreamEvent.Accepted(run, null)
             "speaker" -> GroupStreamEvent.Speaker(run, value.requiredString("messageId"),
                 value.requiredString("characterId"), value.requiredString("characterName"),
-                value["avatarUrl"]?.jsonPrimitive?.contentOrNull)
+                value["avatarUrl"]?.jsonPrimitive?.contentOrNull, value["reasoning"]?.jsonPrimitive?.booleanOrNull ?: false)
             "delta" -> GroupStreamEvent.Delta(run, value.requiredString("messageId"), value.requiredString("textDelta", allowEmpty = true))
             "message_done" -> GroupStreamEvent.MessageDone(run,
                 json.decodeFromJsonElement(GroupMessageDto.serializer(), checkNotNull(value["message"])))

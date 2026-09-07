@@ -8,7 +8,7 @@ vi.mock('../characterPsychology', () => ({getCharacterPsychologyDefaults: mocks.
 beforeEach(() => {mocks.hasUltra.mockResolvedValue(false);mocks.getCharacterById.mockResolvedValue({owner_user_id:'owner',definition_private:0});mocks.getCharacterPsychologyDefaults.mockResolvedValue(null)});
 import {ensureConversationMemorySchema} from '../../db/ensureConversationMemorySchema';
 import {getConversationMemory, createConversationMemoryIfMissing, saveConversationMemory, saveAutomaticConversationMemory} from '../../db/queries/conversationMemory';
-import {projectValidMemory, selectRelevantMemory, STANDARD_MEMORY_LIMITS, ULTRA_MEMORY_LIMITS, getCharacterMemory, updateCharacterMemory} from './memory';
+import {projectValidMemory, selectRelevantMemory, STANDARD_MEMORY_LIMITS, ULTRA_MEMORY_LIMITS, getCharacterMemory, updateCharacterMemory, buildCharacterMemoryPrompt} from './memory';
 async function database() {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE conversations(id TEXT PRIMARY KEY, version INTEGER, owner_user_id TEXT DEFAULT 'owner', character_id TEXT DEFAULT 'character'); CREATE TABLE messages(id TEXT PRIMARY KEY,conversation_id TEXT,position INTEGER,content TEXT,selected_regeneration_id TEXT); CREATE TABLE assistant_regenerations(id TEXT PRIMARY KEY,message_id TEXT,content TEXT); INSERT INTO conversations(id,version) VALUES('chat',3); INSERT INTO messages VALUES('m0','chat',0,'old',NULL),('m1','chat',1,'kept',NULL),('m2','chat',2,'discard',NULL);`);
@@ -92,6 +92,19 @@ describe('tier memory budgets and retrieval',()=>{
 
 describe('memory API ownership and plan enforcement',()=>{
   function context(env:Env) {return {env,user:{userId:'owner'}} as RequestContext;}
+  it('uses saved advanced character detail once in generation context without leaking it through the memory API',async()=>{
+    const {env,db}=await database();try{
+      const detail = 'I restore antique violins and carry a silver tuning fork from my mentor.';
+      mocks.getCharacterPsychologyDefaults.mockResolvedValue({advancedDefinition:detail});
+      // The reader may be Standard; the creator's saved definition remains
+      // part of the character for everyone who is allowed to chat with it.
+      const prompt = await buildCharacterMemoryPrompt(context(env),'chat');
+      expect(prompt).toContain('ADDITIONAL CHARACTER DEFINITION');
+      expect(prompt.split(detail)).toHaveLength(2);
+      expect(prompt).toContain('LONG-TERM MEMORY');
+      expect(JSON.stringify(await getCharacterMemory(context(env),'chat'))).not.toContain(detail);
+    }finally{db.close()}
+  });
   it('rejects Standard writes exceeding the active plan while Ultra accepts its larger allowance',async()=>{
     const {env,db}=await database();try{
       await expect(updateCharacterMemory(context(env),'chat',{shortTerm:'a'.repeat(4001)})).rejects.toMatchObject({code:'MEMORY_LIMIT'});

@@ -38,6 +38,13 @@ const statements = [
   status TEXT NOT NULL DEFAULT 'complete' CHECK(status IN ('streaming','complete','interrupted')),
   UNIQUE(group_id, position)
 )`,
+  `CREATE TABLE IF NOT EXISTS group_memories (
+  group_id TEXT PRIMARY KEY REFERENCES chat_groups(id) ON DELETE CASCADE,
+  memory_json TEXT NOT NULL DEFAULT '{}',
+  last_user_turn INTEGER NOT NULL DEFAULT 0,
+  active_run_id TEXT,
+  updated_at INTEGER NOT NULL DEFAULT 0
+)`,
   `CREATE INDEX IF NOT EXISTS idx_groups_owner_updated ON chat_groups(owner_user_id, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_groups_autonomy ON chat_groups(last_autonomy_at, last_seen_at)`,
   `CREATE INDEX IF NOT EXISTS idx_group_messages_position ON group_messages(group_id, position DESC)`,

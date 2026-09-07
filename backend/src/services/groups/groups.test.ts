@@ -132,6 +132,26 @@ describe("group storage and run fencing", () => {
       expect(await claimGroupContinuation(env, group, "away")).toBeNull();
     } finally { sqlite.close(); }
   });
+  it("allows one quiet follow-up only while the user is present, idle, and not typing", async () => {
+    const {context, env, sqlite} = database();
+    try {
+      const created = await createGroup(context(), "Friends", ["astrid", "leo"]);
+      let group = await requireGroup(context(), created.id);
+      const sent = await claimGroupSend(env, group, "user_message_1", "Hello");
+      await stopGroupRun(env, group.id, sent.runId);
+      group = await requireGroup(context(), group.id);
+      expect(await claimGroupContinuation(env, group, "quiet")).toBeNull();
+      sqlite.prepare("UPDATE chat_groups SET updated_at = ? WHERE id = ?").run(Date.now() - 70_000, group.id);
+      await updateGroupPresence(context(), group.id, true);
+      expect(await claimGroupContinuation(env, group, "quiet")).toBeNull();
+      await updateGroupPresence(context(), group.id, false);
+      const quiet = await claimGroupContinuation(env, group, "quiet");
+      expect(quiet).toBeTruthy();
+      await stopGroupRun(env, group.id, quiet!);
+      sqlite.prepare("UPDATE chat_groups SET last_autonomy_at = 0 WHERE id = ?").run(group.id);
+      expect(await claimGroupContinuation(env, group, "quiet")).toBeNull();
+    } finally { sqlite.close(); }
+  });
   it("paginates stable message positions and blocks a now-private speaker", async () => {
     const {context, env, sqlite} = database();
     try {

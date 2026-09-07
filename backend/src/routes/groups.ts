@@ -31,7 +31,7 @@ export const groupRoutes: RouteDefinition[] = [
   }},
   {method: "POST", path: "/v1/groups/:groupId/continue/stream", auth: true, handler: async context => {
     const body = await parseJson<{reason?: unknown}>(context.request);
-    assert(body.reason === "continue" || body.reason === "typing", 400, "INVALID_TRIGGER", "Invalid group continuation.");
+    assert(body.reason === "continue" || body.reason === "typing" || body.reason === "quiet", 400, "INVALID_TRIGGER", "Invalid group continuation.");
     return continueGroup(context, context.params.groupId, body.reason);
   }},
   {method: "POST", path: "/v1/groups/:groupId/stop", auth: true, handler: async context => {

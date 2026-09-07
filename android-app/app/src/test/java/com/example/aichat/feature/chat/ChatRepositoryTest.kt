@@ -87,6 +87,13 @@ class ChatRepositoryTest {
     }
 
     @Test
+    fun cachedConversationIsHiddenFromAnotherSignedInAccount() = runTest {
+        seedConversation(version = 1)
+        assertThat(repository.observeConversation(CONVERSATION_ID, 20, "another-account").first()).isNull()
+        assertThat(repository.observeConversation(CONVERSATION_ID, 20, USER_ID).first()?.ownerUserId).isEqualTo(USER_ID)
+    }
+
+    @Test
     fun sendMessage_acceptAndComplete_persistsSingleAssistantReply() = runTest {
         seedConversation(version = 1)
         streamingClient.sendHandler = { conversationId, userMessageId, _ ->
@@ -557,7 +564,7 @@ class ChatRepositoryTest {
     fun observeConversation_characterLikeUpdate_emitsUpdatedCharacter() = runTest {
         seedConversation(version = 1)
 
-        repository.observeConversation(CONVERSATION_ID, messageLimit = 20).test {
+        repository.observeConversation(CONVERSATION_ID, messageLimit = 20, ownerUserId = USER_ID).test {
             val initial = awaitItem()
             assertThat(initial?.character?.likedByMe).isFalse()
             assertThat(initial?.character?.likeCount).isEqualTo(0)

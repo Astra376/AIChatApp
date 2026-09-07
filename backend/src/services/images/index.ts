@@ -10,7 +10,7 @@ export async function generateCharacterPortrait(
   context: RequestContext, prompt: string, preview = false, sourceAvatarUrl: string | null = null
 ) {
   if (sourceAvatarUrl) {
-    const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/`);
+    const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/reference.jpg`).slice(0, -"reference.jpg".length);
     const filename = sourceAvatarUrl.startsWith(prefix) ? sourceAvatarUrl.slice(prefix.length) : "";
     if (!/^[a-zA-Z0-9_-]+\.jpg$/.test(filename)
       || !await context.env.ASSETS.head(`portraits/${context.user!.userId}/${filename}`)) {

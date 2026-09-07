@@ -75,8 +75,8 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
         val messageId = state(id).value.failedDraft?.takeIf { it.content == content.trim() }?.id ?: "group_user_${UUID.randomUUID()}"
         return launchOperation(id, messageId, content.trim(), false)
     }
-    fun continueChat(id: String, typing: Boolean = false): Boolean = launchOperation(id, null, null, typing)
-    private fun launchOperation(id: String, userMessageId: String?, content: String?, typing: Boolean): Boolean = synchronized(operations) {
+    fun continueChat(id: String, typing: Boolean = false, idle: Boolean = false): Boolean = launchOperation(id, null, null, typing, idle)
+    private fun launchOperation(id: String, userMessageId: String?, content: String?, typing: Boolean, idle: Boolean = false): Boolean = synchronized(operations) {
         val target = state(id)
         if (operations[id]?.isActive == true || target.value.busy || target.value.detail == null) return@synchronized false
         val token = epoch.get()
@@ -89,7 +89,7 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
         val job = scope.launch(start = CoroutineStart.LAZY) {
             var accepted = false
             try {
-                val source = if (userMessageId != null) streaming.send(id, userMessageId, content.orEmpty()) else streaming.continueChat(id, typing)
+                val source = if (userMessageId != null) streaming.send(id, userMessageId, content.orEmpty()) else streaming.continueChat(id, typing, idle)
                 source.collect { event ->
                     if (epoch.get() != token) return@collect
                     target.update { current -> reduceGroupEvent(current, event) }
@@ -97,7 +97,7 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
                 }
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
-                if (epoch.get() == token) target.update { current -> current.copy(error = if (typing) null else error.userFacingMessage("The group reply was interrupted."),
+                if (epoch.get() == token) target.update { current -> current.copy(error = if (typing || idle) null else error.userFacingMessage("The group reply was interrupted."),
                     failedDraft = if (!accepted && userMessageId != null) PendingGroupSend(userMessageId, content.orEmpty()) else null,
                     detail = current.detail?.let { detail -> if (!accepted && userMessageId != null) detail.copy(messages = detail.messages.filterNot { it.id == userMessageId }) else detail }) }
             } finally {
@@ -143,6 +143,7 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
         sessions.remove(id)
         list.update { it.filterNot { row -> row.id == id } }
     }
+    fun reportError(id: String, message: String) { state(id).update { it.copy(error = message) } }
     fun clearError(id: String) { state(id).update { it.copy(error = null) } }
     fun cancelAllOperations() {
         epoch.incrementAndGet()
@@ -155,7 +156,7 @@ class GroupRepository @Inject constructor(private val api: GroupApi, private val
 data class PendingGroupSend(val id: String, val content: String)
 
 data class GroupChatState(val detail: GroupDetailDto? = null, val loading: Boolean = true, val loadingOlder: Boolean = false,
-    val sending: Boolean = false, val stopping: Boolean = false, val error: String? = null, val revision: Long = 0, val failedDraft: PendingGroupSend? = null) {
+    val sending: Boolean = false, val stopping: Boolean = false, val error: String? = null, val revision: Long = 0, val reasoning: Boolean = false, val failedDraft: PendingGroupSend? = null) {
     val busy: Boolean get() = sending || stopping || (detail?.activeRunId != null && (detail.activeRunExpiresAt ?: 0) > System.currentTimeMillis())
 }
 internal fun mergeMessages(older: List<GroupMessageDto>, newer: List<GroupMessageDto>) =
@@ -172,7 +173,7 @@ internal fun reduceGroupEvent(state: GroupChatState, event: GroupStreamEvent): G
         is GroupStreamEvent.MessageDone -> detail.copy(messages = mergeMessages(detail.messages, listOf(event.message)))
         is GroupStreamEvent.Done, is GroupStreamEvent.Failed -> detail.copy(activeRunId = null, activeRunExpiresAt = null)
     }
-    return state.copy(detail = changed, error = (event as? GroupStreamEvent.Failed)?.message ?: state.error, revision = state.revision + 1)
+    return state.copy(detail = changed, reasoning = if (event is GroupStreamEvent.Speaker) event.reasoning else if (event is GroupStreamEvent.Delta || event is GroupStreamEvent.Done || event is GroupStreamEvent.Failed) false else state.reasoning, error = (event as? GroupStreamEvent.Failed)?.message ?: state.error, revision = state.revision + 1)
 }
 
 /** Replace the server's current window while retaining already loaded older pages.

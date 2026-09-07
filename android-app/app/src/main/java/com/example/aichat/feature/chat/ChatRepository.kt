@@ -178,9 +178,9 @@ class ChatRepository @Inject constructor(
         }.await()
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun observeConversation(conversationId: String, messageLimit: Int): Flow<ConversationDetail?> {
+    fun observeConversation(conversationId: String, messageLimit: Int, ownerUserId: String): Flow<ConversationDetail?> {
         return conversationDao.observeById(conversationId).flatMapLatest { conversation ->
-            if (conversation == null) {
+            if (conversation == null || conversation.ownerUserId != ownerUserId) {
                 flowOf(null)
             } else {
                 combine(

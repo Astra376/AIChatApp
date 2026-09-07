@@ -77,6 +77,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 enum class CharacterCreateStep {
@@ -101,7 +102,8 @@ data class CharacterStudioUiState(
     val isEnhancingPortrait: Boolean = false,
     val selectedPreview: String? = null,
     val isAutoCreating: Boolean = false,
-    val isLoadingEditor: Boolean = false
+    val isLoadingEditor: Boolean = false,
+    val isUltra: Boolean = false
 )
 
 @HiltViewModel
@@ -110,7 +112,8 @@ class CharacterStudioViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val draftStore: CharacterDraftStore,
     authRepository: com.example.aichat.core.auth.AuthRepository,
-    savedStateHandle: androidx.lifecycle.SavedStateHandle
+    savedStateHandle: androidx.lifecycle.SavedStateHandle,
+    retrofit: retrofit2.Retrofit
 ) : ViewModel() {
     private val ownerId = authRepository.sessionState.value.profile?.userId.orEmpty()
     private val editingId: String? = savedStateHandle["characterId"]
@@ -127,9 +130,16 @@ class CharacterStudioViewModel @Inject constructor(
     val events = _events.asSharedFlow()
 
     init {
+        viewModelScope.launch {
+            try { val status = retrofit.create(com.example.aichat.feature.ultra.UltraApi::class.java).status()
+                _uiState.value = _uiState.value.copy(isUltra = status.active)
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (_: Throwable) { }
+        }
         if (editingId != null && restored.draft.id != editingId) loadForEditing(editingId)
         viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
-            _uiState.collect { state ->
+            _uiState.collectLatest { state ->
+                // Coalesce slider/typing changes; onCleared saves the final draft immediately on exit.
+                kotlinx.coroutines.delay(200)
                 draftStore.save(draftKey, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
             }
         }
@@ -331,7 +341,8 @@ fun CharacterStudioRoute(
     onBack: () -> Unit = {},
     onCreated: (String) -> Unit = {},
     viewModel: CharacterStudioViewModel = hiltViewModel(),
-    characterId: String? = null
+    characterId: String? = null,
+    onUpgradeUltra: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(characterId) { characterId?.let(viewModel::loadForEditing) }
@@ -404,6 +415,7 @@ fun CharacterStudioRoute(
                 onUploadPortrait = viewModel::uploadPortrait,
                 onGenerateGreeting = viewModel::generateGreeting,
                 onAutoCreate = viewModel::autoCreate,
+                onUpgradeUltra = onUpgradeUltra,
                 onPsychologyChanged = { value -> viewModel.updateDraft { it.copy(psychologyDefaults = value) } },
                 modifier = Modifier
                     .fillMaxSize()
@@ -455,6 +467,7 @@ private fun CharacterCreateStepContent(
     onUploadPortrait: (Uri) -> Unit,
     onGenerateGreeting: () -> Unit,
     onAutoCreate: () -> Unit,
+    onUpgradeUltra: () -> Unit,
     onPsychologyChanged: (com.example.aichat.core.network.CharacterPsychologyDefaultsDto) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -525,7 +538,7 @@ private fun CharacterCreateStepContent(
         CharacterCreateStep.PSYCHOLOGY -> Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             StepTitle("Build a life")
             Text("These are starting points. Memory, emotions and personality develop naturally through each story.", style=MaterialTheme.typography.bodyMedium)
-            CharacterPsychologyEditor(state.draft.psychologyDefaults, !state.isSaving, onPsychologyChanged)
+            CharacterPsychologyEditor(state.draft.psychologyDefaults, !state.isSaving, state.isUltra, onUpgradeUltra, onPsychologyChanged)
         }
         CharacterCreateStep.DEFINITION -> DefinitionStep(
             value = state.draft.characterDefinition,
@@ -555,7 +568,7 @@ private fun NameStep(
     }
 
     Column(
-        modifier = modifier,
+        modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         StepTitle("What's your character's name?")

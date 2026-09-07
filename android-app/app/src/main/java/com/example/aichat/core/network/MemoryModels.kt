@@ -88,4 +88,9 @@ data class AutoCreateCharacterDto(
 )
 
 @Serializable
-data class EmotionPortraitsDto(val portraits: Map<String, String> = emptyMap(), val generating: Boolean = false)
+data class EmotionPortraitsDto(
+    val portraits: Map<String, String> = emptyMap(),
+    val generating: Boolean = false,
+    val failed: Boolean = false,
+    val format: String = ""
+)

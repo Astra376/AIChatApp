@@ -72,6 +72,8 @@ android {
         }
     }
 
+    sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("generated/image-fixtures"))
+
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }

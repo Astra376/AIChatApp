@@ -1,4 +1,3 @@
-import { hasUltra } from "../billing";
 import type { RequestContext } from "../../env";
 import { publicAssetUrl } from "../../lib/assets";
 import { AppError } from "../../lib/errors";
@@ -19,13 +18,11 @@ export async function generateCharacterPortrait(
     if (owned.customMetadata?.style === "stylized" || owned.customMetadata?.style === "realistic") referenceStyle = owned.customMetadata.style;
   }
   const style = referenceStyle ?? portraitStyle(prompt);
-  const premium = !preview && await hasUltra(context.env, context.user!.userId);
   let model = portraitModel(context.env, style);
   if (preview && style === "stylized") model = context.env.OPENROUTER_PORTRAIT_PREVIEW_MODEL || IMAGE_MODELS.nano;
-  else if (premium && style === "realistic") model = context.env.OPENROUTER_PORTRAIT_PREMIUM_MODEL || IMAGE_MODELS.premium;
   // Uploaded and pre-migration portraits have no style metadata. Keep their
   // identity with the general reference editor rather than guessing an art style.
-  if (sourceAvatarUrl && !referenceStyle && !premium) model = IMAGE_MODELS.nano;
+  if (sourceAvatarUrl && !referenceStyle) model = IMAGE_MODELS.nano;
   const image = await generateImageWithFallback(context.env, {
     model, preview, referenceImageUrl: sourceAvatarUrl ?? undefined,
     prompt: [

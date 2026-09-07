@@ -1,7 +1,7 @@
 import { AppError } from "./errors";
 
 const PUBLIC_ASSET_KEY_PATTERN =
-  /^(?:chat-backgrounds|portraits)\/[a-zA-Z0-9_-]{1,128}\/[a-zA-Z0-9._-]{1,200}\.(?:jpe?g|png|webp)$/;
+  /^(?:chat-backgrounds|portraits|character-art)\/[a-zA-Z0-9_-]{1,128}\/[a-zA-Z0-9._-]{1,200}\.(?:jpe?g|png|webp)$/;
 
 export const PUBLIC_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 

@@ -47,7 +47,7 @@ it("writes bytes directly to R2 and records style/model metadata for future expr
   expect(put).toHaveBeenCalledWith("portraits/u/p.jpg",expect.any(Uint8Array),expect.objectContaining({customMetadata:{style:"stylized",model:IMAGE_MODELS.stylized,cost:"0.035"}}));
 });
 it("requires native PNG alpha and does not substitute an opaque fallback", async () => {
-  expect(imageRequest({ model: IMAGE_MODELS.transparent, prompt: "body", background: "transparent", aspectRatio: "2:3" })).toMatchObject({ background: "transparent", output_format: "png", aspect_ratio: "2:3", resolution: "1K" });
+  expect(imageRequest({ model: IMAGE_MODELS.transparent, prompt: "body", background: "transparent", aspectRatio: "2:3" })).toMatchObject({ background: "transparent", output_format: "png", aspect_ratio: "2:3" });
   const fetch = vi.fn().mockResolvedValue(new Response("unsupported", { status: 404 })); vi.stubGlobal("fetch", fetch);
   await expect(generateImageWithFallback(env, { model: IMAGE_MODELS.transparent, prompt: "body", background: "transparent" })).rejects.toMatchObject({ code: "IMAGE_UPSTREAM_404" });
   expect(fetch).toHaveBeenCalledOnce();

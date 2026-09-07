@@ -59,33 +59,76 @@ describe("character psychology and durable expressions",()=>{
       await expect(saveCharacterPsychology(context(),"character",{advancedDefinition:""})).rejects.toMatchObject({code:"ULTRA_REQUIRED"});
     } finally {db.close()}
   });
-  it("queues expressions once and resumes their provider jobs across requests",async()=>{
-    const {db,env,context}=setup();try{
-      vi.mocked(queueImage).mockImplementation(async(_env,input)=>({provider:"openrouter",id:input.outputKey}));
+  it("builds one neutral body before expressions and preserves durable requests", async () => {
+    const {db,env,context}=setup();try {
+      vi.mocked(queueImage).mockImplementation(async (_env,_input,id) => ({provider:"openrouter",id:id!}));
       vi.mocked(imageJobStatus).mockResolvedValue({status:"running"});
       await generateEmotionPortraits(context(),"character");
-      expect(queueImage).toHaveBeenCalledTimes(6);
-      for(const call of vi.mocked(queueImage).mock.calls) expect(call[1].image.referenceImageUrl).toBe("https://assets.example/portraits%2Fowner%2Fsource.jpg");
+      expect(queueImage).toHaveBeenCalledTimes(1);
+      const neutralInput=vi.mocked(queueImage).mock.calls[0][1];
+      expect(neutralInput.image).toMatchObject({background:"transparent",aspectRatio:"2:3",referenceImageUrl:"https://assets.example/portraits%2Fowner%2Fsource.jpg"});
+      expect(neutralInput.outputKey).toMatch(/^character-art\/owner\/.+_neutral\.png$/);
       await Promise.all([resumeEmotionPortraits(env),resumeEmotionPortraits(env)]);
+      expect(queueImage).toHaveBeenCalledTimes(1);
+      vi.mocked(env.ASSETS.head).mockResolvedValue({customMetadata:{alpha:"verified"}} as any);
+      vi.mocked(imageJobStatus).mockImplementation(async (_env,job) => {
+        const call=vi.mocked(queueImage).mock.calls.find(call=>call[2]===job.id)!;
+        return {status:"completed",imageUrl:`https://assets.example/${encodeURIComponent(call[1].outputKey)}`};
+      });
+      await resumeEmotionPortraits(env); // neutral is published first
+      const neutral=(await readEmotionPortraits(context("viewer"),"character")).portraits.neutral;
+      expect(neutral).toBeTruthy();
+      await resumeEmotionPortraits(env); // expression references use the body, never the avatar
       expect(queueImage).toHaveBeenCalledTimes(6);
-      vi.mocked(imageJobStatus).mockResolvedValue({status:"completed",imageUrl:"https://assets.example/expression.jpg"});
-      vi.mocked(storeRemoteImageInR2).mockImplementation(async(_env,key)=>`https://assets.example/${key}`);
-      await resumeEmotionPortraits(env);
-      const result=await readEmotionPortraits(context("viewer"),"character");
-      expect(Object.keys(result.portraits)).toHaveLength(6);expect(result.generating).toBe(false);
+      for (const call of vi.mocked(queueImage).mock.calls.slice(1)) expect(call[1].image.referenceImageUrl).toBe(neutral);
+      const ready=await readEmotionPortraits(context("viewer"),"character");
+      expect(Object.keys(ready.portraits)).toHaveLength(6);expect(ready.generating).toBe(false);
       await generateEmotionPortraits(context(),"character");
       expect(queueImage).toHaveBeenCalledTimes(6);
-    }finally{db.close()}
+    } finally {db.close()}
   });
-  it("retains the same paid provider job when a status request briefly fails",async()=>{
-    const {db,env,context}=setup();try{
-      vi.mocked(queueImage).mockResolvedValue({provider:"openrouter",id:"r"});
+  it("reuses the paid attempt after queue acknowledgement loss and transient status failure", async () => {
+    const {db,env,context}=setup();try {
+      vi.mocked(queueImage).mockRejectedValueOnce(new Error("Lost queue acknowledgement"));
       await generateEmotionPortraits(context(),"character");
-      vi.mocked(imageJobStatus).mockRejectedValue(new Error("Network interrupted"));
+      const originalId=vi.mocked(queueImage).mock.calls[0][2];
+      vi.mocked(queueImage).mockImplementation(async (_env,_input,id)=>({provider:"openrouter",id:id!}));
+      vi.mocked(imageJobStatus).mockRejectedValue(new Error("Status unavailable"));
       await resumeEmotionPortraits(env);
-      expect(db.prepare("SELECT count(*) AS count FROM character_emotion_portraits WHERE status='generating' AND job_json IS NOT NULL").get()?.count).toBe(6);
-      expect(queueImage).toHaveBeenCalledTimes(6);
-    }finally{db.close()}
+      expect(vi.mocked(queueImage).mock.calls[1][2]).toBe(originalId);
+      await resumeEmotionPortraits(env);
+      expect(queueImage).toHaveBeenCalledTimes(2);
+      expect(db.prepare("SELECT count(*) AS count FROM character_body_art WHERE status='generating'").get()?.count).toBe(6);
+    } finally {db.close()}
+  });
+  it("never exposes old opaque portraits and retries failed attempts only explicitly", async () => {
+    const {db,env,context}=setup();try {
+      vi.mocked(queueImage).mockImplementation(async (_env,_input,id)=>({provider:"openrouter",id:id!}));
+      vi.mocked(imageJobStatus).mockResolvedValue({status:"failed",error:"IMAGE_ALPHA_REQUIRED"});
+      await generateEmotionPortraits(context(),"character");
+      await resumeEmotionPortraits(env);
+      const result=await readEmotionPortraits(context(),"character");
+      expect(result).toMatchObject({portraits:{},generating:false,failed:true,format:"transparent-upper-body-v1"});
+      await readEmotionPortraits(context(),"character");
+      expect(queueImage).toHaveBeenCalledTimes(1);
+      const original=vi.mocked(queueImage).mock.calls[0][2];
+      await generateEmotionPortraits(context(),"character");
+      expect(queueImage).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(queueImage).mock.calls[1][2]).not.toBe(original);
+    } finally {db.close()}
+  });
+  it("ignores a stale completion after the avatar changes", async () => {
+    const {db,env,context}=setup();try {
+      vi.mocked(queueImage).mockImplementation(async (_env,_input,id)=>({provider:"openrouter",id:id!}));
+      vi.mocked(imageJobStatus).mockResolvedValue({status:"running"});
+      await generateEmotionPortraits(context(),"character");
+      const oldAttempt=vi.mocked(queueImage).mock.calls[0][2];
+      db.prepare("UPDATE characters SET avatar_url='https://assets.example/portraits%2Fowner%2Fnew.jpg'").run();
+      await generateEmotionPortraits(context(),"character");
+      expect(vi.mocked(queueImage).mock.calls[1][2]).not.toBe(oldAttempt);
+      expect(db.prepare("SELECT count(*) AS count FROM character_body_art WHERE source_url LIKE '%new.jpg'").get()?.count).toBe(6);
+      expect((await readEmotionPortraits(context("viewer"),"character")).portraits).toEqual({});
+    } finally {db.close()}
   });
   it("uses Pro for complete AI creation and removes the incompatible Standard provider restriction",async()=>{
     const {db,context}=setup();try{

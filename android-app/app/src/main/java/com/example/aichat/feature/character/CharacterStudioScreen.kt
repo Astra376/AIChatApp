@@ -236,7 +236,7 @@ class CharacterStudioViewModel @Inject constructor(
                 val results = kotlinx.coroutines.supervisorScope {
                     (1..4).map { index -> async {
                         characterRepository.generatePortrait(
-                            "$prompt\nPortrait option $index. Square full-bleed character art, no borders.",
+                            "$prompt\nPortrait option $index. Square close-up head-and-shoulders profile portrait with an opaque background, no borders.",
                             preview = true
                         )
                     } }.awaitAll()
@@ -631,7 +631,7 @@ private fun AppearanceStep(
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         StepTitle("What do they look like?")
-        Text(if (isEnhancing) "Enhancing selected portrait…" else "Choose a preview to create the full-quality portrait.",
+        Text(if (isEnhancing) "Enhancing selected portrait…" else "Choose a profile picture. Separate upper-body expressions will be created for chat.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (portraitOptions.isNotEmpty() || isGenerating) {
             PortraitOptionGrid(

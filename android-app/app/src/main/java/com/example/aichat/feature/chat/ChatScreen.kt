@@ -393,9 +393,10 @@ fun ChatRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val atmosphere: ChatAtmosphereViewModel = hiltViewModel()
     val emotionPortrait by atmosphere.portrait.collectAsStateWithLifecycle()
+    val artwork by atmosphere.artwork.collectAsStateWithLifecycle()
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     val lastMessage = state.conversation?.messages?.maxByOrNull { it.position }
-    LaunchedEffect(state.conversation?.character?.id, lastMessage?.id, lastMessage?.updatedAt, state.isStreamBusy) {
+    LaunchedEffect(state.conversation?.character?.id, lastMessage?.id, lastMessage?.updatedAt, state.isStreamBusy, artwork.generating) {
         val characterId = state.conversation?.character?.id ?: return@LaunchedEffect
         if (!state.isStreamBusy) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
             atmosphere.refresh(characterId)
@@ -403,7 +404,7 @@ fun ChatRoute(
             atmosphere.refresh(characterId)
             kotlinx.coroutines.delay(5_000)
             atmosphere.refresh(characterId)
-            repeat(20) {
+            repeat(72) {
                 if (!atmosphere.portraitsGenerating) return@repeatOnLifecycle
                 kotlinx.coroutines.delay(5_000)
                 atmosphere.refreshPortraits(characterId)
@@ -484,7 +485,13 @@ fun ChatRoute(
     )
 
     }
-    if (showPreferences) ChatPreferencesSheet(onDismiss = { showPreferences = false }, onUpgrade = onUpgradeUltra, model = preferencesModel)
+    if (showPreferences) ChatPreferencesSheet(
+        onDismiss = { showPreferences = false }, onUpgrade = onUpgradeUltra, model = preferencesModel,
+        artwork = artwork,
+        canManageArtwork = state.conversation?.let { it.character.ownerUserId == it.ownerUserId } == true,
+        artworkBusy = atmosphere.retryingArtwork, artworkError = atmosphere.artworkError,
+        onRetryArtwork = { state.conversation?.character?.id?.let(atmosphere::retryArtwork) }
+    )
 
     actionMessage?.let { message ->
         val isLatestAssistant = messages.firstOrNull()?.takeIf { it.role == MessageRole.ASSISTANT && it.sendState == MessageSendState.SENT }?.id == message.id
@@ -810,7 +817,7 @@ private fun List<ChatMessage>.sortedForReverseLayout(): List<ChatMessage> {
 }
 
 @Composable
-private fun ChatSceneBackground(
+internal fun ChatSceneBackground(
     imageUrl: String?,
     emotionPortraitUrl: String? = null,
     onLoadFailed: (String) -> Unit
@@ -849,13 +856,16 @@ private fun ChatSceneBackground(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background.copy(alpha = 0.58f))
         )
-        if (emotionPortraitUrl != null) {
+        val bodyRequest = remember(emotionPortraitUrl, context) {
+            emotionPortraitUrl?.let { ImageRequest.Builder(context).data(it).crossfade(120).build() }
+        }
+        if (bodyRequest != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context).data(emotionPortraitUrl).crossfade(180).build(),
-                contentDescription = null, contentScale = ContentScale.Crop,
+                model = bodyRequest,
+                contentDescription = null, contentScale = ContentScale.Fit,
                 alignment = Alignment.BottomCenter,
                 modifier = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
-                    .graphicsLayer { alpha = 0.28f }
+                    .graphicsLayer { alpha = 0.44f }
             )
         }
         Box(

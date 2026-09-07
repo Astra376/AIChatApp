@@ -1,3 +1,5 @@
+> Superseded for stylized profiles and chat expressions by [the transparent character artwork evaluation](transparent-character-art-evaluation.md). Background and realistic-profile findings below remain applicable.
+
 # OpenRouter image comparison — 7 September 2026
 
 All new Meek images now use OpenRouter. The final model choices prioritize portrait quality and stable character identity over the lowest price.

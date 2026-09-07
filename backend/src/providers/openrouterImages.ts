@@ -9,8 +9,8 @@ export const IMAGE_MODELS = {
   background: "black-forest-labs/flux.2-klein-9b",
   nano: "google/gemini-3.1-flash-image",
   premium: "google/gemini-3-pro-image",
-  transparent: "sourceful/riverflow-v2.5-pro",
-  transparentAlternative: "openai/gpt-image-1"
+  transparent: "openai/gpt-image-1",
+  riverflow: "sourceful/riverflow-v2.5-pro"
 } as const;
 export type PortraitStyle = "realistic" | "stylized";
 export interface ImageInput {
@@ -54,7 +54,7 @@ export function imageRequest(input: ImageInput): Record<string, unknown> {
   if (input.quality) body.quality = input.quality;
   if (input.background === "transparent") {
     // A PNG extension or a prompt saying "transparent" cannot create an alpha channel.
-    if (![IMAGE_MODELS.transparent, IMAGE_MODELS.transparentAlternative].includes(input.model as typeof IMAGE_MODELS.transparent)) {
+    if (!new Set<string>([IMAGE_MODELS.transparent, IMAGE_MODELS.riverflow]).has(input.model)) {
       throw new AppError(503, "IMAGE_ALPHA_UNSUPPORTED", "The character artwork model must support transparent PNG images.");
     }
     body.background = "transparent";

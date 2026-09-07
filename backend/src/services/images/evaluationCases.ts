@@ -1,3 +1,4 @@
+import { upperBodyPrompt, expressionPrompt } from "./characterArtPrompts";
 import { IMAGE_MODELS, type ImageInput } from "../../providers/openrouterImages";
 export interface EvaluationCase { id: string; label: string; image: ImageInput; reference?: string; }
 const photo = "Editorial photograph of a fictional adult woman, age 29, head and upper torso, three-quarter view. Warm olive skin with natural pores and a small mole below her left eye, hazel-green eyes, slightly asymmetric smile, shoulder-length wavy dark brown hair with one copper streak on her right. Burgundy cable-knit cardigan, small silver crescent pendant. Hands outside the frame. Quiet slate-grey studio background, soft window light from the left, 85mm portrait lens. Natural unretouched skin, believable hair and fabric, restrained color, a calm neutral expression. No text, no watermark, no beauty-filter skin.";
@@ -31,19 +32,17 @@ export const legacyImageEvaluationCases: EvaluationCase[] = [
 ];
 
 // A separate immutable run keeps previous paid comparisons cached.
-const body = "Use the reference solely for the exact character identity and art style. Create a clean upper-body character layer, vertical 2:3, from the complete top of the hair to the hips. Include both full shoulders, both arms and relaxed hands. Keep hair, ears and arms inside the canvas with clear margin at the top and sides. Same face, age, hair, eye color, skin, identifying marks, outfit and jewelry. Extend the outfit naturally below the portrait crop. Face toward the viewer, neutral relaxed expression. High quality finished artwork. The background must be genuinely transparent alpha, including all space around the body and between arms and torso. No scenery, rectangle, backdrop, floor, cast shadow, checkerboard, text, border or watermark. Do not draw a close-up portrait or a full-length standing figure.";
-const bodyExpression = (emotion: string) => `Edit this exact transparent upper-body character layer. Change only the facial expression to ${emotion}, clearly readable but natural. Preserve the identical person, face geometry, hair, identifying marks, clothing and jewelry. Preserve the exact canvas dimensions, head and body position, size, pose, arm and hand positions, crop and art style. Full head to hips, with clear margin around hair and arms. Keep every background pixel genuinely transparent, including gaps within the silhouette. No background, floor, cast shadow, checkerboard, text or new objects.`;
 export const transparentImageEvaluationCases: EvaluationCase[] = [
   { id: "profile_photo", label: "FLUX realistic profile crop", image: { model: IMAGE_MODELS.realistic, prompt: photo + " IMPORTANT: square profile picture, close-up head and shoulders only, face large, entire hair visible, opaque studio background. No waist-up framing." } },
   { id: "profile_anime", label: "Nano Banana 2 stylized profile crop", image: { model: IMAGE_MODELS.nano, prompt: anime + " IMPORTANT: square profile picture, close-up head and shoulders only, face large, entire hair visible, opaque studio background. No waist-up framing." } },
   ...(["photo", "anime"] as const).flatMap(style => (["river", "gpt"] as const).flatMap(provider => {
     const id = `${style}_${provider}`;
-    const model = provider === "river" ? IMAGE_MODELS.transparent : IMAGE_MODELS.transparentAlternative;
-    const settings: ImageInput = { model, prompt: body, background: "transparent", aspectRatio: "2:3", ...(provider === "gpt" ? { quality: "high" as const } : {}) };
+    const model = provider === "river" ? IMAGE_MODELS.riverflow : IMAGE_MODELS.transparent;
+    const settings: ImageInput = { model, prompt: upperBodyPrompt, background: "transparent", aspectRatio: "2:3", ...(provider === "gpt" ? { quality: "high" as const } : {}) };
     return [
       { id, label: `${style} upper body / ${provider}`, reference: `profile_${style}`, image: settings },
-      { id: `${id}_joy`, label: `${style} joy / ${provider}`, reference: id, image: { ...settings, prompt: bodyExpression("warm joyful laughter") } },
-      { id: `${id}_sad`, label: `${style} sadness / ${provider}`, reference: id, image: { ...settings, prompt: bodyExpression("quiet sadness") } }
+      { id: `${id}_joy`, label: `${style} joy / ${provider}`, reference: id, image: { ...settings, prompt: expressionPrompt("warm joyful laughter") } },
+      { id: `${id}_sad`, label: `${style} sadness / ${provider}`, reference: id, image: { ...settings, prompt: expressionPrompt("quiet sadness") } }
     ];
   }))
 ];

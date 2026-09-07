@@ -67,7 +67,12 @@ internal fun chatFontFamily(choice: String): FontFamily? = when (choice) {
 internal val LocalChatFont = staticCompositionLocalOf<FontFamily?> { null }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun ChatPreferencesSheet(onDismiss: () -> Unit, onUpgrade: () -> Unit, model: ChatPreferencesViewModel = hiltViewModel()) {
+@Composable fun ChatPreferencesSheet(
+    onDismiss: () -> Unit, onUpgrade: () -> Unit, model: ChatPreferencesViewModel = hiltViewModel(),
+    artwork: com.example.aichat.core.network.EmotionPortraitsDto = com.example.aichat.core.network.EmotionPortraitsDto(),
+    canManageArtwork: Boolean = false, artworkBusy: Boolean = false, artworkError: String? = null,
+    onRetryArtwork: () -> Unit = {}
+) {
     val prefs by model.preferences.collectAsStateWithLifecycle()
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -86,6 +91,20 @@ internal val LocalChatFont = staticCompositionLocalOf<FontFamily?> { null }
                     if (value != "default" && !prefs.ultra) { onDismiss(); onUpgrade() }
                     else model.update("chatFont", value)
                 }
+            }
+            if (canManageArtwork) {
+                Text("Character artwork", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text(when {
+                    artwork.generating || artworkBusy -> "Creating expressions · ${artwork.portraits.size} of 6 ready"
+                    artwork.failed -> "Some expressions couldn't be created. Your ready artwork is saved."
+                    artwork.portraits.isNotEmpty() -> "${artwork.portraits.size} expressions ready"
+                    else -> "Add upper-body expressions behind the conversation."
+                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (artwork.generating || artworkBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                else if (artwork.failed || artwork.portraits.isEmpty()) TextButton(onClick = onRetryArtwork) {
+                    Text(if (artwork.failed) "Retry missing expressions" else "Create chat artwork")
+                }
+                artworkError?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }
             if (model.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             model.error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = model::refresh) { Text("Retry") } }

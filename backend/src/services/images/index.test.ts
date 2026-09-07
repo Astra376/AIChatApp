@@ -91,9 +91,9 @@ it("preserves the source image style when the selected portrait's refinement pro
   vi.mocked(generateImageWithFallback).mockResolvedValue(image);
   vi.mocked(storeGeneratedImage).mockResolvedValue("https://worker.example/refined.jpg");
   const context = { env: { ASSETS: { head: vi.fn(async () => ({ customMetadata: { style: "stylized" } })) },
-    R2_PUBLIC_BASE_URL: "https://worker.example/v1/assets", OPENROUTER_PORTRAIT_STYLIZED_MODEL: "bytedance-seed/seedream-5-0-lite" },
+    R2_PUBLIC_BASE_URL: "https://worker.example/v1/assets", OPENROUTER_PORTRAIT_STYLIZED_MODEL: "google/gemini-3.1-flash-image" },
     user: { userId: "user_1" } } as unknown as RequestContext;
   await generateCharacterPortrait(context, "Enhance this portrait", false, "https://worker.example/v1/assets/portraits%2Fuser_1%2Fpreview.jpg");
-  expect(generateImageWithFallback).toHaveBeenCalledWith(context.env, expect.objectContaining({ model: "bytedance-seed/seedream-5-0-lite" }));
+  expect(generateImageWithFallback).toHaveBeenCalledWith(context.env, expect.objectContaining({ model: "google/gemini-3.1-flash-image" }));
   expect(storeGeneratedImage).toHaveBeenCalledWith(context.env, expect.any(String), image, "stylized");
 });

@@ -50,3 +50,11 @@ it("requires a live evaluation secret and fixed fixture id before any job can st
   await expect(evaluateImage(context)).rejects.toMatchObject({status:404});
   expect(fetch).not.toHaveBeenCalled();
 });
+it("lists the fixed comparison cases with a valid short-lived credential", async () => {
+  const token = "a".repeat(64);
+  const context = { env: { IMAGE_EVALUATION_TOKEN: JSON.stringify({ token, run: "comparison", expiresAt: Date.now() + 600000 }) },
+    params: {}, request: new Request("https://worker/internal/image-evaluation", { headers: { Authorization: `Bearer ${token}` } }) } as unknown as RequestContext;
+  const result = await evaluateImage(context);
+  expect(result).toMatchObject({ run: "comparison" });
+  expect("cases" in result && result.cases).toHaveLength(24);
+});

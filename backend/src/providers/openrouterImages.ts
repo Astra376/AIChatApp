@@ -92,7 +92,11 @@ export async function generateImageWithOpenRouter(env: Env, input: ImageInput): 
   const encoded = result.data?.[0]?.b64_json;
   if (!encoded || encoded.length > 20_000_000) throw new AppError(502, "IMAGE_EMPTY", "The image provider returned no usable image.");
   let bytes: Uint8Array;
-  try { bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0)); }
+  try {
+    const decoded = atob(encoded);
+    bytes = new Uint8Array(decoded.length);
+    for (let index = 0; index < decoded.length; index++) bytes[index] = decoded.charCodeAt(index);
+  }
   catch { throw new AppError(502, "IMAGE_INVALID_OUTPUT", "The image provider returned an invalid image."); }
   return { bytes, mediaType: mediaType(bytes), model: input.model, cost: typeof result.usage?.cost === "number" ? result.usage.cost : null };
 }

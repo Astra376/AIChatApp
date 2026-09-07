@@ -20,7 +20,17 @@ let installed = false;
 try {
   wrangler(["secret", "put", "IMAGE_EVALUATION_TOKEN"], JSON.stringify({ token, run: manifest.id, expiresAt: Date.now() + 1_800_000 }));
   installed = true;
-  const { cases } = await call("");
+  // A new Worker secret can take a short time to reach the responding location.
+  // Only retry this read-only readiness check, never a paid image submission.
+  let ready;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    try { ready = await call(""); break; }
+    catch (error) {
+      if (attempt === 15) throw error;
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+    }
+  }
+  const { cases } = ready;
   if (cases.length > manifest.maximumCalls || cases.length > 28) throw new Error("Evaluation exceeds its fixed call allowance");
   async function run(spec) {
     if (spec.reference && results.get(spec.reference)?.status !== "completed") {

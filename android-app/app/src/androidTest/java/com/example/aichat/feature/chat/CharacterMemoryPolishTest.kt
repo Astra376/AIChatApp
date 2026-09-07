@@ -23,8 +23,8 @@ class CharacterMemoryPolishTest {
         compose.onNodeWithText("Current scene draft").assertIsDisplayed()
         compose.onNodeWithText("Long term").performClick()
         compose.onNodeWithText("Lasting memory draft").assertIsDisplayed()
-        compose.onNodeWithText("Personality", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Memory", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("Personality", useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithText("Memory", useUnmergedTree = true).performScrollTo().performClick()
         compose.onNodeWithText("Lasting memory draft").assertIsDisplayed()
         compose.waitForIdle()
         android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p /data/local/tmp/meek-psychology-dark.png")).use { it.readBytes() }

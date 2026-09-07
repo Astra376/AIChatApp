@@ -167,6 +167,9 @@ class ProfileViewModel @Inject constructor(
                     launch { characterRepository.refreshOwnedCharacters() }
                     launch { characterRepository.refreshLikedCharacters() }
                 }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                // Keep the cached profile usable when its character refresh is offline.
             } finally {
                 isLoading.value = false
             }

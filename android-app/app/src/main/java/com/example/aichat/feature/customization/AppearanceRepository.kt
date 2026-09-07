@@ -64,35 +64,76 @@ class AppearanceRepository @Inject constructor(retrofit: Retrofit, client: OkHtt
     private val readyState = MutableStateFlow(false)
     val ready = readyState.asStateFlow()
     private var accountId: String? = null
+    private var savedUltraDesign: AppearanceDto? = null
     private var sessionRevision = 0
     private val showcases = java.util.concurrent.ConcurrentHashMap<String, ShowcaseDto>()
+
     suspend fun activate(userId: String) {
         if (accountId == userId && readyState.value) return
         sessionRevision++
         accountId = userId
         readyState.value = false
         val revision = sessionRevision
-        val cached = withContext(Dispatchers.IO) { cache.getString(userId, null)?.let { runCatching { json.decodeFromString<AppearanceDto>(it) }.getOrNull() } }
+        val (cached, design) = withContext(Dispatchers.IO) {
+            fun read(key: String) = cache.getString(key, null)?.let {
+                runCatching { json.decodeFromString<AppearanceDto>(it) }.getOrNull()
+            }
+            read(userId) to read("design:$userId")
+        }
         if (revision != sessionRevision) return
+        savedUltraDesign = design ?: cached?.takeIf { it.ultra }
         state.value = cached ?: AppearanceDto()
         readyState.value = cached != null
-        try { refresh() } finally { if (revision == sessionRevision) readyState.value = true }
+        try {
+            refresh()
+        } finally {
+            if (revision == sessionRevision) readyState.value = true
+        }
     }
+
     private fun publish(value: AppearanceDto) {
         state.value = value
-        accountId?.let { cache.edit().putString(it, json.encodeToString(AppearanceDto.serializer(), value)).apply() }
+        if (value.ultra) savedUltraDesign = value
+        accountId?.let {
+            val editor = cache.edit().putString(it, json.encodeToString(AppearanceDto.serializer(), value))
+            if (value.ultra) editor.putString("design:$it", json.encodeToString(AppearanceDto.serializer(), value))
+            editor.apply()
+        }
         listOf(value.bannerId to value.bannerUrl, value.profileBackgroundId to value.profileBackgroundUrl, value.backgroundId to value.backgroundUrl).forEach { (id, url) ->
             if (url != null) context.imageLoader.enqueue(coil.request.ImageRequest.Builder(context).data(url).memoryCacheKey("appearance:$id").diskCacheKey("appearance:$id").build())
         }
     }
+
     fun updateUltraAccess(active: Boolean) {
         if (active == state.value.ultra) return
         sessionRevision++ // Discard appearance requests started before the entitlement changed.
-        publish(if (active) state.value.copy(ultra = true) else AppearanceDto())
+        publish(if (active) (savedUltraDesign ?: state.value).copy(ultra = true) else AppearanceDto())
     }
-    suspend fun refresh() { val revision=sessionRevision; val result=api.get(); if(revision==sessionRevision) { publish(result); runCatching { LauncherAppearance.select(context,result.icon) } } }
-    fun reset() { sessionRevision++; accountId=null; readyState.value=false; state.value=AppearanceDto(); runCatching { LauncherAppearance.select(context,"default") } }
-    suspend fun save(value: AppearanceDto) { val revision=sessionRevision; val result=api.update(value.patch()); if(revision==sessionRevision) publish(result) }
+
+    suspend fun refresh() {
+        val revision = sessionRevision
+        val result = api.get()
+        if (revision == sessionRevision) {
+            publish(result)
+            runCatching { LauncherAppearance.select(context, result.icon) }
+        }
+    }
+
+    fun reset() {
+        sessionRevision++
+        accountId = null
+        savedUltraDesign = null
+        readyState.value = false
+        state.value = AppearanceDto()
+        runCatching { LauncherAppearance.select(context, "default") }
+    }
+
+    suspend fun save(value: AppearanceDto) {
+        val revision = sessionRevision
+        val result = api.update(value.patch())
+        if (revision == sessionRevision) publish(result)
+    }
+
     fun cachedShowcase(userId: String) = showcases[userId]
     suspend fun showcase(userId: String) = api.showcase(userId).also { showcases[userId] = it }
     suspend fun upload(kind: String, uri: Uri): AppearanceAsset = withContext(Dispatchers.IO) {

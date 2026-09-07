@@ -94,7 +94,8 @@ data class CharacterWriteRequestDto(
     val systemPrompt: String,
     val definitionPrivate: Boolean,
     val visibility: String,
-    val avatarUrl: String? = null
+    val avatarUrl: String? = null,
+    val voiceId: String? = null
 )
 
 @Serializable
@@ -139,7 +140,9 @@ data class ConversationDetailDto(
     val ownerUserId: String,
     val conversationVersion: Long,
     val character: CharacterDto,
-    val messages: List<MessageDto>
+    val messages: List<MessageDto>,
+    val activeRunId: String? = null,
+    val activeRunExpiresAt: Long? = null
 )
 
 @Serializable
@@ -240,3 +243,6 @@ data class StopChatRequestDto(val runId: String, val partialReply: StoppedReplyD
 
 @Serializable
 data class StoppedReplyDto(val messageId: String, val text: String, val regenerate: Boolean = false)
+
+@kotlinx.serialization.Serializable
+data class TrendingSearchesResponseDto(val queries: List<String> = emptyList())

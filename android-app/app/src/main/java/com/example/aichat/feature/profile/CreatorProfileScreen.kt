@@ -28,6 +28,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.example.aichat.core.auth.AuthRepository
+import com.example.aichat.feature.activity.NotificationRepository
 import com.example.aichat.core.model.CharacterSummary
 import com.example.aichat.core.model.PublicProfile
 import com.example.aichat.core.network.userFacingMessage
@@ -47,6 +49,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 data class CreatorProfileUiState(
@@ -54,16 +60,25 @@ data class CreatorProfileUiState(
     val characters: List<CharacterSummary> = emptyList(),
     val nextCursor: String? = null,
     val isLoading: Boolean = true,
-    val isLoadingMore: Boolean = false
+    val isLoadingMore: Boolean = false,
+    val isOwnProfile: Boolean = false,
+    val following: Boolean = false,
+    val followerCount: Int? = null,
+    val isFollowLoading: Boolean = true,
+    val isChangingFollow: Boolean = false
 )
 
 @HiltViewModel
 class CreatorProfileViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val repository: CreatorProfileRepository
+    private val repository: CreatorProfileRepository,
+    private val notificationRepository: NotificationRepository,
+    authRepository: AuthRepository
 ) : ViewModel() {
     private val userId: String = checkNotNull(savedStateHandle["userId"])
-    private val _uiState = MutableStateFlow(CreatorProfileUiState())
+    private val isOwnProfile = userId == authRepository.sessionState.value.profile?.userId
+    private val _uiState = MutableStateFlow(CreatorProfileUiState(isOwnProfile = isOwnProfile))
+    private var refreshJob: Job? = null
     val uiState: StateFlow<CreatorProfileUiState> = _uiState.asStateFlow()
     private val _events = MutableSharedFlow<String>()
     val events = _events.asSharedFlow()
@@ -73,23 +88,56 @@ class CreatorProfileViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = CreatorProfileUiState(isLoading = true)
-            val profileResult = runCatching { repository.getProfile(userId) }
-            val charactersResult = runCatching { repository.getCharacters(userId) }
-            val profile = profileResult.getOrNull()
-            val characters = charactersResult.getOrNull()
-            _uiState.value = CreatorProfileUiState(
-                profile = profile,
-                characters = characters?.items.orEmpty(),
-                nextCursor = characters?.nextCursor,
-                isLoading = false
-            )
-            profileResult.exceptionOrNull()?.let {
-                _events.emit(it.userFacingMessage("Couldn't load creator profile."))
+        if (refreshJob?.isActive == true) return
+        _uiState.value = _uiState.value.copy(isLoading = true, isFollowLoading = true)
+        refreshJob = viewModelScope.launch {
+            launch {
+                try {
+                    val follow = notificationRepository.followState(userId)
+                    _uiState.value = _uiState.value.copy(following = follow.following, followerCount = follow.followerCount)
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                } finally {
+                    _uiState.value = _uiState.value.copy(isFollowLoading = false)
+                }
             }
-            charactersResult.exceptionOrNull()?.let {
-                _events.emit(it.userFacingMessage("Couldn't load creator characters."))
+            coroutineScope {
+                val profileRequest = async { runCatching { repository.getProfile(userId) } }
+                val charactersRequest = async { runCatching { repository.getCharacters(userId) } }
+                val profileResult = profileRequest.await()
+                val charactersResult = charactersRequest.await()
+                _uiState.value = _uiState.value.copy(
+                    profile = profileResult.getOrNull() ?: _uiState.value.profile,
+                    characters = charactersResult.getOrNull()?.items ?: _uiState.value.characters,
+                    nextCursor = if (charactersResult.isSuccess) charactersResult.getOrNull()?.nextCursor else _uiState.value.nextCursor,
+                    isLoading = false
+                )
+                val error = profileResult.exceptionOrNull() ?: charactersResult.exceptionOrNull()
+                if (error is CancellationException) throw error
+                error?.let { _events.emit(it.userFacingMessage("Couldn't load creator profile.")) }
+            }
+        }
+    }
+
+    fun toggleFollow() {
+        val previous = _uiState.value
+        if (previous.isOwnProfile || previous.isFollowLoading || previous.isChangingFollow) return
+        val following = !previous.following
+        _uiState.value = previous.copy(
+            following = following,
+            followerCount = previous.followerCount?.let { (it + if (following) 1 else -1).coerceAtLeast(0) },
+            isChangingFollow = true
+        )
+        viewModelScope.launch {
+            try {
+                val result = notificationRepository.setFollow(userId, following)
+                _uiState.value = _uiState.value.copy(following = result.following, followerCount = result.followerCount)
+            } catch (error: Exception) {
+                _uiState.value = _uiState.value.copy(following = previous.following, followerCount = previous.followerCount)
+                if (error is CancellationException) throw error
+                _events.emit(error.userFacingMessage("Couldn't update following."))
+            } finally {
+                _uiState.value = _uiState.value.copy(isChangingFollow = false)
             }
         }
     }
@@ -108,6 +156,7 @@ class CreatorProfileViewModel @Inject constructor(
                     )
                 }
                 .onFailure {
+                    if (it is CancellationException) throw it
                     _uiState.value = _uiState.value.copy(isLoadingMore = false)
                     _events.emit(it.userFacingMessage("Couldn't load more characters."))
                 }
@@ -141,7 +190,8 @@ fun CreatorProfileRoute(
             onBack = onBack,
             onOpenCharacter = onOpenCharacter,
             onLoadMore = viewModel::loadMore,
-            onRetry = viewModel::refresh
+            onRetry = viewModel::refresh,
+            onToggleFollow = viewModel::toggleFollow
         )
     }
 }
@@ -152,7 +202,8 @@ internal fun CreatorProfileContent(
     onBack: () -> Unit,
     onOpenCharacter: (String) -> Unit,
     onLoadMore: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onToggleFollow: () -> Unit = {}
 ) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
@@ -214,6 +265,35 @@ internal fun CreatorProfileContent(
                         text = "Retry",
                         onClick = onRetry
                     )
+                }
+            }
+        }
+
+        if (state.profile != null) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(AppChrome.compactControlGap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = state.followerCount?.let { if (it == 1) "1 follower" else "$it followers" } ?: "Followers",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!state.isOwnProfile) {
+                        PrimaryButton(
+                            text = when {
+                                state.isChangingFollow -> "Updating…"
+                                state.isFollowLoading -> "Loading…"
+                                state.following -> "Following"
+                                else -> "Follow"
+                            },
+                            enabled = !state.isFollowLoading && !state.isChangingFollow,
+                            onClick = onToggleFollow
+                        )
+                    }
                 }
             }
         }

@@ -50,32 +50,49 @@ jobs:
       - name: Test and build phone APK
         working-directory: android-app
         run: >-
-          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleDebug
+          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleRelease assembleDebugAndroidTest
           -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
           -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Check chat interactions on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          working-directory: android-app
+          script: bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
       - name: Keep test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-test-reports
-          path: android-app/app/build/reports/tests/
+          path: |
+            android-app/app/build/reports/tests/
+            android-app/app/build/reports/androidTests/
+            android-app/app/build/outputs/androidTest-results/
       - name: Keep APK
         uses: actions/upload-artifact@v4
         with:
           name: meek-apk
-          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          path: android-app/app/build/outputs/apk/release/app-release.apk
       - name: Publish phone download
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk Meek.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Meek.apk
           sha256sum Meek.apk > Meek.apk.sha256
           cat > /tmp/preview-notes.md <<'NOTES'
           Open Meek.apk on your Android phone and choose Update.
-          This development build uses the repository's existing shared debug certificate.
+          This non-debuggable preview build uses the repository's existing shared debug certificate.
           If Android reports an incompatible signature, keep your installed app; do not uninstall it and lose local data.
           Cloudflare backend changes require a separate deployment; the build logs show whether deployment credentials were available.
           NOTES

@@ -134,7 +134,8 @@ class CharacterRepository @Inject constructor(
                 systemPrompt = systemPrompt,
                 definitionPrivate = draft.definitionPrivate,
                 visibility = draft.visibility.name.lowercase(),
-                avatarUrl = draft.avatarUrl
+                avatarUrl = draft.avatarUrl,
+                voiceId = draft.voiceId
             )
             val remote = if (draft.id == null) {
                 characterApi.createCharacter(payload)

@@ -5,8 +5,10 @@ compatibility_flags = ["enable_request_signal"]
 
 [vars]
 GOOGLE_WEB_CLIENT_ID = "1081775489416-vdlfr5tjuea8l826mqog05ijfp3ltk76.apps.googleusercontent.com"
-OPENROUTER_MODEL = "deepseek/deepseek-v4-flash"
-OPENROUTER_FALLBACK_MODELS = "deepseek/deepseek-v3.2"
+OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
+OPENROUTER_PROVIDERS = "venice"
+OPENROUTER_ULTRA_MODEL = "deepseek/deepseek-v4-pro-0813"
+OPENROUTER_FALLBACK_MODELS = ""
 FAL_MODEL = "fal-ai/nano-banana-2"
 R2_PUBLIC_BASE_URL = "https://character-chat-worker.robloxproxy.workers.dev/v1/assets"
 

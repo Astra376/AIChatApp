@@ -35,7 +35,7 @@ vi.mock("../../db/queries/conversations", () => ({
   updateConversationActivity: mocks.updateConversationActivity
 }));
 
-import { createConversation } from ".";
+import { createConversation, getConversationDetail } from ".";
 import { conversationRoutes } from "../../routes/conversations";
 
 const character = {
@@ -162,5 +162,28 @@ describe("createConversation", () => {
       expect.anything(),
       expect.objectContaining({ id: body.id })
     );
+  });
+});
+
+describe("conversation stream recovery metadata", () => {
+  it("returns the exact live run only to its owner and suppresses expired leases", async () => {
+    const record = {
+      id: "conversation", owner_user_id: "viewer-1", character_id: "character-1", version: 1,
+      active_run_id: "run-known", active_run_expires_at: Date.now() + 30_000
+    };
+    mocks.getConversationById.mockResolvedValue(record);
+    mocks.listMessages.mockResolvedValue([]);
+    mocks.listRegenerationsForConversation.mockResolvedValue([]);
+    expect(await getConversationDetail(context(), "conversation")).toMatchObject({
+      activeRunId: "run-known", activeRunExpiresAt: record.active_run_expires_at
+    });
+    mocks.getConversationById.mockResolvedValue({ ...record, active_run_expires_at: Date.now() - 1 });
+    expect(await getConversationDetail(context(), "conversation")).toMatchObject({ activeRunId: null, activeRunExpiresAt: null });
+    mocks.getCharacterById.mockClear();
+    mocks.listMessages.mockClear();
+    mocks.getConversationById.mockResolvedValue({ ...record, owner_user_id: "someone-else" });
+    await expect(getConversationDetail(context(), "conversation")).rejects.toMatchObject({ status: 403 });
+    expect(mocks.getCharacterById).not.toHaveBeenCalled();
+    expect(mocks.listMessages).not.toHaveBeenCalled();
   });
 });

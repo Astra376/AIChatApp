@@ -1,28 +1,26 @@
-import type { RequestContext } from "../../env";
+import type { Env, RequestContext } from "../../env";
 import { ensureConversationStreamingSchema } from "../../db/ensureConversationStreamingSchema";
 import { getCharacterById, incrementCharacterActivity } from "../../db/queries/characters";
 import {
   claimConversationRun,
-  deleteMessagesAfter,
   finishStoppedConversationRun,
   getConversationById,
   getConversationSummaryById,
   getMessageById,
   insertMessage,
   insertRegeneration,
-  listMessages,
-  listRegenerationsForConversation,
+  listContextMessages,
   releaseConversationRun,
   updateConversationActivity,
-  updateMessageContent,
-  updateMessageSelection,
-  updateRegenerationContent
+  updateMessageSelection
 } from "../../db/queries/conversations";
 import type { StoppedReplySnapshot } from "../../db/queries/conversations";
 import { AppError, forbidden } from "../../lib/errors";
 import { createId } from "../../lib/ids";
 import { streamChatText } from "../../providers/openrouter";
-import { editTranscriptMessage, requireLatestAssistant, requireRegenerationSelection, rewindTranscript } from "./rules";
+import { requireLatestAssistant } from "./rules";
+import { editMessageAtomically, rewindToMessageAtomically, selectRegenerationAtomically } from "../../db/queries/transcriptMutations";
+import { hasUltra } from "../billing";
 import {
   buildCharacterMemoryPrompt,
   composeCharacterSystemPrompt,
@@ -30,9 +28,9 @@ import {
 } from "./memory";
 import { formatRoleplayMessage } from "./formatRoleplay";
 
-// Provider attempts are bounded (25s idle, 90s total). Keep a final safety
-// lease beyond their maximum combined duration, rather than a four-minute lock.
-const RUN_LOCK_WINDOW_MS = 130_000;
+// Provider work has a single 60-second budget across all attempts. Leave time
+// for D1 finalization, while abandoned runs expire without a multi-minute lock.
+const RUN_LOCK_WINDOW_MS = 75_000;
 const MAX_MODEL_INPUT_CHARACTERS = 200_000;
 const MIN_RECENT_TRANSCRIPT_CHARACTERS = 16_000;
 
@@ -118,14 +116,7 @@ function toStreamError(error: unknown): { code: string; message: string } {
 }
 
 async function loadTranscript(context: RequestContext, conversationId: string): Promise<TranscriptMessage[]> {
-  const messages = await listMessages(context.env, conversationId);
-  const regenerations = await listRegenerationsForConversation(context.env, conversationId);
-  const grouped = new Map<string, typeof regenerations>();
-  for (const regeneration of regenerations) {
-    const list = grouped.get(regeneration.message_id) ?? [];
-    list.push(regeneration);
-    grouped.set(regeneration.message_id, list);
-  }
+  const messages = await listContextMessages(context.env, conversationId);
 
   return messages.map((message) => ({
     id: message.id,
@@ -137,12 +128,7 @@ async function loadTranscript(context: RequestContext, conversationId: string): 
     createdAt: message.created_at,
     updatedAt: message.updated_at,
     selectedRegenerationId: message.selected_regeneration_id,
-    regenerations: (grouped.get(message.id) ?? []).map((regeneration) => ({
-      id: regeneration.id,
-      messageId: regeneration.message_id,
-      content: regeneration.content,
-      createdAt: regeneration.created_at
-    }))
+    regenerations: []
   }));
 }
 
@@ -218,18 +204,22 @@ async function acquireConversationRun(context: RequestContext, conversationId: s
 
 async function buildAssistantContext(
   context: RequestContext,
-  conversationId: string,
+  conversation: NonNullable<Awaited<ReturnType<typeof getConversationById>>>,
   options: {
     untilPosition?: number;
     appendedUserContent?: string;
   } = {}
 ) {
-  const conversation = await requireOwnedConversation(context, conversationId);
-  const character = await getCharacterById(context.env, context.user!.userId, conversation.character_id);
+  const conversationId = conversation.id;
+  const [character, transcript, memoryPrompt, ultra] = await Promise.all([
+    getCharacterById(context.env, context.user!.userId, conversation.character_id),
+    loadTranscript(context, conversationId),
+    buildCharacterMemoryPrompt(context, conversationId),
+    hasUltra(context.env, context.user!.userId)
+  ]);
   if (!character) {
     throw new AppError(404, "CHARACTER_NOT_FOUND", "Character not found.");
   }
-  const transcript = await loadTranscript(context, conversationId);
   const fullVisibleTranscript = transcript
     .filter((message) => options.untilPosition == null || message.position < options.untilPosition)
     .map((message) => ({
@@ -243,7 +233,6 @@ async function buildAssistantContext(
       content: options.appendedUserContent
     });
   }
-  const memoryPrompt = await buildCharacterMemoryPrompt(context, conversationId);
   const systemContent = composeCharacterSystemPrompt(character.system_prompt, memoryPrompt);
   const transcriptBudget = Math.max(
     MIN_RECENT_TRANSCRIPT_CHARACTERS,
@@ -255,6 +244,14 @@ async function buildAssistantContext(
     conversation,
     character,
     transcript,
+    modelEnv: ultra && context.env.OPENROUTER_ULTRA_MODEL ? {
+      ...context.env,
+      OPENROUTER_MODEL: context.env.OPENROUTER_ULTRA_MODEL,
+      OPENROUTER_FALLBACK_MODELS: "",
+      // Venice does not currently serve the verified Pro 0813 model. Use the
+      // Pro provider policy rather than inheriting a Flash-only restriction.
+      OPENROUTER_PROVIDERS: context.env.OPENROUTER_ULTRA_PROVIDERS ?? ""
+    } : context.env,
     messages: [
       {
         role: "system" as const,
@@ -358,13 +355,13 @@ async function releaseConversationRunBeforeTerminal(
 }
 
 async function streamAssistantReply(
-  context: RequestContext,
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   onChunk: (chunk: string) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  modelEnv: Env
 ): Promise<string> {
   let fullText = "";
-  for await (const chunk of streamChatText(context.env, messages, signal)) {
+  for await (const chunk of streamChatText(modelEnv, messages, signal)) {
     fullText += chunk;
     onChunk(chunk);
   }
@@ -377,90 +374,37 @@ async function streamAssistantReply(
   return finalText;
 }
 
-export async function editMessage(context: RequestContext, messageId: string, newContent: string) {
+async function requireMutableMessage(context: RequestContext, messageId: string) {
   const message = await getMessageById(context.env, messageId);
-  if (!message) {
-    throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
-  }
+  if (!message) throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
   const conversation = await requireOwnedConversation(context, message.conversation_id);
   assertConversationUnlocked(conversation);
+  return message;
+}
 
-  const transcript = await loadTranscript(context, message.conversation_id);
-  let target: { targetMessageId: string; targetRegenerationId: string | null };
-  try {
-    target = editTranscriptMessage(transcript, messageId, newContent);
-  } catch (error) {
-    throw new AppError(400, "CHAT_RULE_ERROR", (error as Error).message);
-  }
-
-  const now = Date.now();
-  if (target.targetRegenerationId) {
-    await updateRegenerationContent(context.env, target.targetRegenerationId, newContent.trim());
-    await updateMessageSelection(context.env, {
-      messageId: target.targetMessageId,
-      selectedRegenerationId: target.targetRegenerationId,
-      updatedAt: now,
-      edited: true
-    });
-  } else {
-    await updateMessageContent(context.env, {
-      messageId: target.targetMessageId,
-      content: newContent.trim(),
-      edited: true,
-      updatedAt: now
-    });
-  }
-  await updateConversationActivity(context.env, message.conversation_id, now);
+export async function editMessage(context: RequestContext, messageId: string, newContent: string) {
+  const content = newContent.trim();
+  if (!content) throw new AppError(400, "CHAT_RULE_ERROR", "Message content cannot be empty.");
+  const message = await requireMutableMessage(context, messageId);
+  const updated = await editMessageAtomically(
+    context.env, context.user!.userId, message.conversation_id, messageId, content, Date.now()
+  );
+  if (!updated) throw new AppError(409, "TRANSCRIPT_CHANGED", "The conversation changed. Please try again.");
   scheduleCharacterMemoryConsolidation(context, message.conversation_id, message.position);
 }
 
 export async function rewindConversation(context: RequestContext, messageId: string) {
-  const message = await getMessageById(context.env, messageId);
-  if (!message) {
-    throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
-  }
-  const conversation = await requireOwnedConversation(context, message.conversation_id);
-  assertConversationUnlocked(conversation);
-
-  const transcript = await loadTranscript(context, message.conversation_id);
-  let remaining: TranscriptMessage[];
-  try {
-    remaining = rewindTranscript(transcript, messageId) as TranscriptMessage[];
-  } catch (error) {
-    throw new AppError(400, "CHAT_RULE_ERROR", (error as Error).message);
-  }
-  const last = remaining.at(-1);
-  await deleteMessagesAfter(context.env, message.conversation_id, last?.position ?? -1);
-  await updateConversationActivity(context.env, message.conversation_id, Date.now());
-  scheduleCharacterMemoryConsolidation(
-    context,
-    message.conversation_id,
-    (last?.position ?? -1) + 1
-  );
+  const message = await requireMutableMessage(context, messageId);
+  const deleted = await rewindToMessageAtomically(context.env, context.user!.userId, message.conversation_id, messageId, Date.now());
+  if (deleted > 0) scheduleCharacterMemoryConsolidation(context, message.conversation_id, message.position + 1);
 }
 
 export async function selectRegeneration(context: RequestContext, messageId: string, regenerationId: string | null) {
-  const message = await getMessageById(context.env, messageId);
-  if (!message) {
-    throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
-  }
-  const conversation = await requireOwnedConversation(context, message.conversation_id);
-  assertConversationUnlocked(conversation);
-
-  const transcript = await loadTranscript(context, message.conversation_id);
-  if (regenerationId != null) {
-    try {
-      requireRegenerationSelection(transcript, messageId, regenerationId);
-    } catch (error) {
-      throw new AppError(400, "CHAT_RULE_ERROR", (error as Error).message);
-    }
-  }
-  await updateMessageSelection(context.env, {
-    messageId,
-    selectedRegenerationId: regenerationId,
-    updatedAt: Date.now()
-  });
-  await updateConversationActivity(context.env, message.conversation_id, Date.now());
+  const message = await requireMutableMessage(context, messageId);
+  const selected = await selectRegenerationAtomically(
+    context.env, context.user!.userId, message.conversation_id, messageId, regenerationId, Date.now()
+  );
+  if (!selected) throw new AppError(400, "CHAT_RULE_ERROR", "Only a version of the latest assistant reply can be selected.");
   scheduleCharacterMemoryConsolidation(context, message.conversation_id, message.position);
 }
 
@@ -479,7 +423,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
   let leaseReleased = false;
 
   try {
-    const { character, transcript, messages } = await buildAssistantContext(context, conversationId);
+    const { character, transcript, messages, modelEnv } = await buildAssistantContext(context, conversation);
     const continuationMessages = messagesForContinuation(messages, transcript.at(-1)?.role);
     const assistantMessageId = `message_${runId}`;
     const assistantPosition = (transcript.at(-1)?.position ?? -1) + 1;
@@ -500,7 +444,6 @@ export async function continueAssistantAndStream(context: RequestContext, conver
 
         try {
           const finalText = await streamAssistantReply(
-            context,
             continuationMessages,
             (chunk) => {
               partialText += chunk;
@@ -510,7 +453,8 @@ export async function continueAssistantAndStream(context: RequestContext, conver
                 textDelta: chunk
               });
             },
-            abortController.signal
+            abortController.signal,
+            modelEnv
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";
@@ -539,11 +483,15 @@ export async function continueAssistantAndStream(context: RequestContext, conver
             updated_at: assistantMessage.updatedAt,
             selected_regeneration_id: null
           }, runId);
-          await updateConversationActivity(context.env, conversationId, assistantNow);
-          await incrementCharacterActivity(context.env, character.id, assistantNow);
+          await Promise.all([
+            updateConversationActivity(context.env, conversationId, assistantNow),
+            incrementCharacterActivity(context.env, character.id, assistantNow)
+          ]);
 
-          const summary = await getConversationSummaryById(context.env, context.user!.userId, conversationId);
-          const updatedConversation = await getConversationById(context.env, conversationId);
+          const [summary, updatedConversation] = await Promise.all([
+            getConversationSummaryById(context.env, context.user!.userId, conversationId),
+            getConversationById(context.env, conversationId)
+          ]);
           if (!summary || !updatedConversation) {
             throw new AppError(500, "CONVERSATION_SYNC_FAILED", "Conversation state could not be finalized.");
           }
@@ -610,7 +558,8 @@ export async function continueAssistantAndStream(context: RequestContext, conver
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no"
       }
     });
   } catch (error) {
@@ -626,7 +575,7 @@ export async function sendMessageAndStream(
   userMessageId: string,
   content: string
 ): Promise<Response> {
-  await requireOwnedConversation(context, conversationId);
+  const conversation = await requireOwnedConversation(context, conversationId);
   const runId = await acquireConversationRun(context, conversationId);
   let unlinkRequestAbort = () => {};
   let leaseReleased = false;
@@ -637,7 +586,7 @@ export async function sendMessageAndStream(
       throw new AppError(409, "DUPLICATE_MESSAGE_ID", "This message has already been sent.");
     }
 
-    const { conversation, character, transcript, messages } = await buildAssistantContext(context, conversationId, {
+    const { character, transcript, messages, modelEnv } = await buildAssistantContext(context, conversation, {
       appendedUserContent: content
     });
     const assistantMessageId = `message_${runId}`;
@@ -684,7 +633,6 @@ export async function sendMessageAndStream(
 
         try {
           const finalText = await streamAssistantReply(
-            context,
             messages,
             (chunk) => {
               partialText += chunk;
@@ -694,7 +642,8 @@ export async function sendMessageAndStream(
                 textDelta: chunk
               });
             },
-            abortController.signal
+            abortController.signal,
+            modelEnv
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";
@@ -723,11 +672,15 @@ export async function sendMessageAndStream(
             updated_at: assistantMessage.updatedAt,
             selected_regeneration_id: null
           }, runId);
-          await updateConversationActivity(context.env, conversationId, assistantNow);
-          await incrementCharacterActivity(context.env, character.id, assistantNow);
+          await Promise.all([
+            updateConversationActivity(context.env, conversationId, assistantNow),
+            incrementCharacterActivity(context.env, character.id, assistantNow)
+          ]);
 
-          const summary = await getConversationSummaryById(context.env, context.user!.userId, conversationId);
-          const updatedConversation = await getConversationById(context.env, conversationId);
+          const [summary, updatedConversation] = await Promise.all([
+            getConversationSummaryById(context.env, context.user!.userId, conversationId),
+            getConversationById(context.env, conversationId)
+          ]);
           if (!summary || !updatedConversation) {
             throw new AppError(500, "CONVERSATION_SYNC_FAILED", "Conversation state could not be finalized.");
           }
@@ -794,7 +747,8 @@ export async function sendMessageAndStream(
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no"
       }
     });
   } catch (error) {
@@ -812,13 +766,13 @@ export async function regenerateLatestAssistantAndStream(
   if (!message) {
     throw new AppError(404, "MESSAGE_NOT_FOUND", "Message not found.");
   }
-  await requireOwnedConversation(context, message.conversation_id);
+  const conversation = await requireOwnedConversation(context, message.conversation_id);
   const runId = await acquireConversationRun(context, message.conversation_id);
   let unlinkRequestAbort = () => {};
   let leaseReleased = false;
 
   try {
-    const transcript = await loadTranscript(context, message.conversation_id);
+    const { transcript, messages, modelEnv } = await buildAssistantContext(context, conversation, { untilPosition: message.position });
     let latest: TranscriptMessage;
     try {
       latest = requireLatestAssistant(transcript, messageId) as TranscriptMessage;
@@ -826,9 +780,6 @@ export async function regenerateLatestAssistantAndStream(
       throw new AppError(400, "CHAT_RULE_ERROR", (error as Error).message);
     }
 
-    const { conversation, messages } = await buildAssistantContext(context, message.conversation_id, {
-      untilPosition: latest.position
-    });
     const regenerationId = `regen_${runId}`;
     const linkedAbort = createLinkedAbortController(context.request.signal);
     const abortController = linkedAbort.abortController;
@@ -848,7 +799,6 @@ export async function regenerateLatestAssistantAndStream(
 
         try {
           const finalText = await streamAssistantReply(
-            context,
             messages,
             (chunk) => {
               partialText += chunk;
@@ -858,7 +808,8 @@ export async function regenerateLatestAssistantAndStream(
                 textDelta: chunk
               });
             },
-            abortController.signal
+            abortController.signal,
+            modelEnv
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";
@@ -884,8 +835,10 @@ export async function regenerateLatestAssistantAndStream(
           }, runId);
           await updateConversationActivity(context.env, message.conversation_id, regenerationNow);
 
-          const summary = await getConversationSummaryById(context.env, context.user!.userId, message.conversation_id);
-          const updatedConversation = await getConversationById(context.env, message.conversation_id);
+          const [summary, updatedConversation] = await Promise.all([
+            getConversationSummaryById(context.env, context.user!.userId, message.conversation_id),
+            getConversationById(context.env, message.conversation_id)
+          ]);
           if (!summary || !updatedConversation) {
             throw new AppError(500, "CONVERSATION_SYNC_FAILED", "Conversation state could not be finalized.");
           }
@@ -974,7 +927,8 @@ export async function regenerateLatestAssistantAndStream(
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no"
       }
     });
   } catch (error) {

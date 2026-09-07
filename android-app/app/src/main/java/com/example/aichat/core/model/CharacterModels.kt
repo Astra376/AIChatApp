@@ -40,7 +40,8 @@ data class CharacterDraft(
     val characterDefinition: String = "",
     val definitionPrivate: Boolean = false,
     val visibility: CharacterVisibility = CharacterVisibility.PUBLIC,
-    val avatarUrl: String? = null
+    val avatarUrl: String? = null,
+    val voiceId: String? = null
 )
 
 data class CursorPage<T>(

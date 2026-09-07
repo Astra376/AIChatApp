@@ -54,6 +54,13 @@ async function ensureConversationStreamingSchemaImpl(env: Env): Promise<void> {
       throw error;
     }
   }
+
+  // Existing installations deploy the Worker independently of migrations.
+  // The child-key index is critical for cascading rewinds and version loads.
+  await env.DB.batch([
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_regenerations_message_created ON assistant_regenerations(message_id, created_at)"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_conversations_owner_character_updated ON conversations(owner_user_id, character_id, updated_at DESC, started_at DESC, id DESC)")
+  ]);
 }
 
 export function ensureConversationStreamingSchema(env: Env): Promise<void> {

@@ -1,16 +1,17 @@
 package com.example.aichat.feature.profile
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -19,14 +20,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Tab
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.TabRowDefaults
@@ -41,19 +39,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.aichat.core.auth.AuthRepository
 import com.example.aichat.core.design.AppIcon
 import com.example.aichat.core.design.AppIcons
-import com.example.aichat.core.design.CircleAvatar
 import com.example.aichat.core.design.IconCircleButton
 import com.example.aichat.core.design.IconPillButton
-import com.example.aichat.core.design.SelectionButton
 import com.example.aichat.core.model.CharacterSummary
 import com.example.aichat.core.ui.AppChrome
 import com.example.aichat.core.ui.CharacterSummaryCardPlaceholder
 import com.example.aichat.core.ui.CharacterSummaryCard
-import com.example.aichat.core.ui.ShimmerBox
-import com.example.aichat.core.ui.ShimmerTextLine
+import com.example.aichat.core.ui.rememberCharacterChatLauncher
 import com.example.aichat.core.ui.ScreenBackgroundBox
-import com.example.aichat.core.network.userFacingMessage
-import com.example.aichat.core.ui.MainPageHeader
 import com.example.aichat.core.ui.ProfileCountStat
 import com.example.aichat.core.ui.ProfileHeader
 import com.example.aichat.core.ui.ProfileHeaderPlaceholder
@@ -152,9 +145,14 @@ class ProfileViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            characterRepository.refreshOwnedCharacters()
-            characterRepository.refreshLikedCharacters()
-            isLoading.value = false
+            try {
+                kotlinx.coroutines.coroutineScope {
+                    launch { characterRepository.refreshOwnedCharacters() }
+                    launch { characterRepository.refreshLikedCharacters() }
+                }
+            } finally {
+                isLoading.value = false
+            }
         }
     }
 
@@ -172,11 +170,16 @@ fun ProfileRoute(
     onOpenConversation: (String) -> Unit,
     onOpenEditProfile: () -> Unit,
     onOpenSettings: () -> Unit,
+    onUpgradeUltra: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val chatLauncher = rememberCharacterChatLauncher(
+        ensureConversation = viewModel::ensureConversation,
+        onOpenConversation = onOpenConversation,
+        snackbarHostState = snackbarHostState
+    )
     var section by remember { mutableStateOf(ProfileSection.OWNED) }
 
     ScreenBackgroundBox(snackbarHostState = snackbarHostState) {
@@ -234,6 +237,27 @@ fun ProfileRoute(
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
+                Surface(
+                    onClick = onUpgradeUltra,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Meek Ultra", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("Explore premium models", style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text("Upgrade", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 SecondaryTabRow(
                     selectedTabIndex = ProfileSection.entries.indexOf(section),
                     containerColor = androidx.compose.ui.graphics.Color.Transparent,
@@ -255,24 +279,15 @@ fun ProfileRoute(
                             ProfileSection.RECENT -> AppIcons.activity // No bold version available
                             ProfileSection.INTERACTED -> if (isSelected) AppIcons.chats else AppIcons.chatsOutline
                         }
-                        androidx.compose.foundation.layout.Box(
-                            modifier = Modifier
-                                .height(48.dp)
-                                .selectable(
-                                    selected = isSelected,
-                                    onClick = { section = s },
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ),
-                            contentAlignment = androidx.compose.ui.Alignment.Center
-                        ) {
-                            AppIcon(
-                                icon = icon,
-                                contentDescription = s.name,
-                                size = 24.dp,
-                                tint = if (isSelected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                            )
-                        }
+                        Tab(
+                            selected = isSelected,
+                            onClick = { section = s },
+                            selectedContentColor = MaterialTheme.colorScheme.onBackground,
+                            unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            icon = {
+                                AppIcon(icon = icon, contentDescription = s.name, size = 24.dp)
+                            }
+                        )
                     }
                 }
             }
@@ -303,15 +318,11 @@ fun ProfileRoute(
             items(characters, key = { it.id }) { character ->
                 CharacterSummaryCard(
                     character = character,
+                    isOpening = chatLauncher.openingCharacterId == character.id,
+                    enabled = chatLauncher.openingCharacterId == null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    scope.launch {
-                        viewModel.ensureConversation(character.id)
-                            .onSuccess(onOpenConversation)
-                            .onFailure {
-                                snackbarHostState.showSnackbar(it.userFacingMessage("Couldn't open chat."))
-                            }
-                    }
+                    chatLauncher.open(character.id)
                 }
             }
         }

@@ -176,6 +176,21 @@ export async function listMessages(env: Env, conversationId: string): Promise<Me
   );
 }
 
+// The model needs visible versions, not every discarded regeneration. Bound
+// the database read as well as the prompt; durable history lives in memory.
+export async function listContextMessages(env: Env, conversationId: string): Promise<MessageRecord[]> {
+  const messages = await all<MessageRecord>(env.DB.prepare(`
+    SELECT m.id, m.conversation_id, m.position, m.role,
+      COALESCE(r.content, m.content) AS content, m.edited, m.created_at, m.updated_at,
+      m.selected_regeneration_id
+    FROM messages m
+    LEFT JOIN assistant_regenerations r ON r.id = m.selected_regeneration_id AND r.message_id = m.id
+    WHERE m.conversation_id = ?
+    ORDER BY m.position DESC LIMIT 256
+  `).bind(conversationId));
+  return messages.reverse();
+}
+
 export async function listRegenerationsForConversation(
   env: Env,
   conversationId: string

@@ -38,6 +38,7 @@ class ConversationRepository @Inject constructor(
 
     suspend fun ensureConversation(ownerUserId: String, characterId: String): Result<String> {
         return runCatching {
+            conversationDao.findByOwnerAndCharacter(ownerUserId, characterId)?.let { return@runCatching it.id }
             val summary = conversationApi.createConversation(CreateConversationRequestDto(characterId))
             upsertConversationSummary(ownerUserId, summary)
             summary.id

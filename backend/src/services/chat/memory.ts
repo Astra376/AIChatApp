@@ -54,6 +54,8 @@ async function getOrCreateMemory(
   conversationId: string
 ): Promise<ConversationMemoryRecord> {
   await ensureConversationMemorySchema(context.env);
+  const existing = await getConversationMemory(context.env, conversationId);
+  if (existing) return existing;
   await createConversationMemoryIfMissing(context.env, conversationId, Date.now());
   const memory = await getConversationMemory(context.env, conversationId);
   if (!memory) {

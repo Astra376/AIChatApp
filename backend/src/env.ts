@@ -6,6 +6,16 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   OPENROUTER_MODEL: string;
   OPENROUTER_FALLBACK_MODELS?: string;
+  OPENROUTER_PROVIDERS?: string;
+  OPENROUTER_ULTRA_MODEL?: string;
+  OPENROUTER_ULTRA_PROVIDERS?: string;
+  RESEND_API_KEY?: string;
+  NOTIFICATION_EMAIL_FROM?: string;
+  NOTIFICATION_APP_URL?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_ULTRA_PRICE_ID?: string;
+  BILLING_RETURN_URL?: string;
   FAL_API_KEY: string;
   FAL_MODEL: string;
   FAL_BACKGROUND_MODEL?: string;

@@ -1,5 +1,9 @@
 package com.example.aichat
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,8 +19,17 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private var notificationUri by mutableStateOf<Uri?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        notificationUri = intent.data
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationUri = intent.data
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
@@ -25,7 +38,7 @@ class MainActivity : ComponentActivity() {
             val viewModel: AppViewModel = hiltViewModel()
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             AppTheme(themeMode = themeMode) {
-                AiChatApp(appViewModel = viewModel)
+                AiChatApp(appViewModel = viewModel, notificationUri = notificationUri, onNotificationConsumed = { notificationUri = null; intent.data = null })
             }
         }
     }

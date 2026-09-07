@@ -1,9 +1,12 @@
+import { getTrendingSearches } from "../services/home/trending";
 import { getHomeFeed, searchHome } from "../services/home";
 import { json } from "../lib/response";
 import { clampPageSize, parseCursor, requireString } from "../lib/validation";
 import type { RouteDefinition } from "./types";
 
 export const homeRoutes: RouteDefinition[] = [
+  { method: "GET", path: "/v1/home/trending", auth: true,
+    handler: async context => json(await getTrendingSearches(context)) },
   {
     method: "GET",
     path: "/v1/home/feed",

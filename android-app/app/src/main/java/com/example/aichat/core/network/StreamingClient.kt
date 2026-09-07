@@ -129,7 +129,10 @@ class WorkerStreamingClient private constructor(
     }
 
     private fun stream(request: Request, expectedStream: ExpectedStream): Flow<ChatStreamEvent> = callbackFlow {
-        val call = streamingHttpClient.newCall(request)
+        val call = streamingHttpClient.newCall(request.newBuilder()
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .build())
         val readerJob = launch(Dispatchers.IO) {
             val response = try {
                 call.execute()

@@ -37,7 +37,7 @@ object NetworkModule {
             .addInterceptor(sessionRefreshingInterceptor)
             .addInterceptor(
                 HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
+                    level = if (com.example.aichat.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
                 }
             )
             .build()
@@ -74,7 +74,12 @@ object NetworkModule {
     fun provideConversationApi(retrofit: Retrofit): ConversationApi = retrofit.create(ConversationApi::class.java)
 
     @Provides
-    fun provideChatApi(retrofit: Retrofit): ChatApi = retrofit.create(ChatApi::class.java)
+    fun provideChatApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ChatApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder()
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build())
+        .build().create(ChatApi::class.java)
 
     @Provides
     @Singleton

@@ -7,6 +7,9 @@ import { authRoutes } from "./routes/auth";
 import { characterRoutes } from "./routes/characters";
 import { chatRoutes } from "./routes/chat";
 import { conversationRoutes } from "./routes/conversations";
+import { notificationRoutes } from "./routes/notifications";
+import { voiceRoutes } from "./routes/voice";
+import { billingRoutes } from "./routes/billing";
 import { homeRoutes } from "./routes/home";
 import { imageRoutes } from "./routes/images";
 import { profileRoutes } from "./routes/profile";
@@ -14,6 +17,9 @@ import type { RouteDefinition } from "./routes/types";
 
 const routes: RouteDefinition[] = [
   ...assetRoutes,
+  ...notificationRoutes,
+  ...voiceRoutes,
+  ...billingRoutes,
   ...authRoutes,
   ...profileRoutes,
   ...characterRoutes,

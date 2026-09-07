@@ -23,6 +23,8 @@ class HomeRepository @Inject constructor(
         )
     }
 
+    suspend fun trendingSearches(): List<String> = homeApi.trendingSearches().queries
+
     suspend fun search(query: String, cursor: String?): CursorPage<CharacterSummary> {
         if (query.isBlank()) return CursorPage(emptyList(), null)
         val page = homeApi.search(query = query.trim(), cursor = cursor)

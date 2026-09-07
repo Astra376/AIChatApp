@@ -42,6 +42,8 @@ android {
             signingConfig = signingConfigs.getByName("sharedDebug")
         }
         release {
+            signingConfig = signingConfigs.getByName("sharedDebug")
+            isDebuggable = false
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

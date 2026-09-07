@@ -2,7 +2,6 @@ package com.example.aichat.core.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -27,7 +26,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.composed
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,21 +37,21 @@ import com.example.aichat.core.design.appOutlineSurface
 
 object AppChrome {
     val screenHorizontalPadding = 20.dp
-    val screenTopPadding = 16.dp
-    val screenBottomPadding = 24.dp
-    val sectionSpacing = 14.dp
-    val gridSpacing = 12.dp
+    val screenTopPadding = 6.dp
+    val screenBottomPadding = 12.dp
+    val sectionSpacing = 10.dp
+    val gridSpacing = 8.dp
     val compactControlSize = 42.dp
     val compactControlGap = 10.dp
-    val compactHeaderVerticalPadding = 8.dp
+    val compactHeaderVerticalPadding = 4.dp
     val headerActionIconSize = 24.dp
     val bottomBarHeight = 50.dp
     val bottomBarTapHeight = 50.dp
     val bottomBarHorizontalPadding = 16.dp
-    val bottomBarVerticalPadding = 6.dp
+    val bottomBarVerticalPadding = 0.dp
     val bottomBarItemHorizontalPadding = 4.dp
     val bottomBarIconSize = 28.dp
-    val listRowGap = 20.dp
+    val listRowGap = 12.dp
 }
 
 @Composable
@@ -89,8 +87,9 @@ fun Modifier.pageContentFrame(
         framedModifier = framedModifier.imePadding()
     }
     framedModifier.padding(
-        horizontal = AppChrome.screenHorizontalPadding,
-        vertical = AppChrome.screenTopPadding
+        start = AppChrome.screenHorizontalPadding,
+        end = AppChrome.screenHorizontalPadding,
+        bottom = paddingValues.calculateBottomPadding() + AppChrome.screenBottomPadding
     )
 }
 
@@ -154,16 +153,11 @@ fun AppBackButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .size(AppChrome.compactControlSize)
             .appOutlineSurface(shape = CircleShape)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         AppIcon(

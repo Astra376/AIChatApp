@@ -9,10 +9,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import com.example.aichat.core.design.DesignMetrics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -31,14 +37,16 @@ fun CharacterSummaryCard(
     character: CharacterSummary,
     modifier: Modifier = Modifier,
     imageAspectRatio: Float = 1.25f,
+    isOpening: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     val teaser = character.tagline.ifBlank { character.greeting }
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .clip(RoundedCornerShape(DesignMetrics.portraitCorner))
+            .clickable(enabled = enabled, onClick = onClick)
     ) {
         Box(
             modifier = Modifier
@@ -50,6 +58,13 @@ fun CharacterSummaryCard(
                 avatarUrl = character.avatarUrl,
                 modifier = Modifier.fillMaxSize()
             )
+            if (isOpening) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(36.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),
+                    strokeWidth = 2.dp
+                )
+            }
             CharacterCountBadge(
                 icon = AppIcons.chats,
                 count = character.publicChatCount,
@@ -82,6 +97,7 @@ fun CharacterSummaryCard(
                     lineHeight = 16.sp
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.94f),
+                minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )

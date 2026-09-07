@@ -35,8 +35,10 @@ class OpenRouterFailure extends Error {
 }
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const REQUEST_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 2;
+const STREAM_IDLE_MS = 12_000;
+const STREAM_TOTAL_MS = 60_000;
 
 function configuredModels(env: Env): string[] {
   const candidates = [
@@ -50,6 +52,17 @@ function modelSelection(env: Env): { model: string } | { models: string[] } {
   const models = configuredModels(env);
   if (models.length > 1) return { models };
   return { model: models[0] };
+}
+
+function chatProviderSelection(env: Env): Record<string, unknown> {
+  const only = (env.OPENROUTER_PROVIDERS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  return {
+    // Interactive chat should favor time to first token, rather than the
+    // router's default price-weighted selection. Keep explicit provider policy
+    // across retries instead of silently falling back to another provider.
+    sort: "latency",
+    ...(only.length ? { only, allow_fallbacks: false } : { allow_fallbacks: true })
+  };
 }
 
 function requestHeaders(env: Env): Record<string, string> {
@@ -153,31 +166,17 @@ async function requestOpenRouter(
   signal?: AbortSignal,
   deadline?: RequestDeadline
 ): Promise<Response> {
-  let lastFailure: unknown;
-  for (let attempt = 0; attempt < REQUEST_ATTEMPTS; attempt += 1) {
-    try {
-      const pending = fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: requestHeaders(env),
-        body: JSON.stringify(body),
-        signal
-      });
-      const response = await (deadline ? deadline.run(pending) : pending);
-      if (response.ok) return response;
-
-      const failure = await (deadline ? deadline.run(parseFailure(response)) : parseFailure(response));
-      lastFailure = failure;
-      if (!failure.retryable || attempt === REQUEST_ATTEMPTS - 1) throw failure;
-      await waitBeforeRetry(attempt, failure.retryAfterMs, signal);
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      lastFailure = error;
-      if (error instanceof OpenRouterFailure && !error.retryable) throw error;
-      if (attempt === REQUEST_ATTEMPTS - 1) throw error;
-      await waitBeforeRetry(attempt, 0, signal);
-    }
-  }
-  throw lastFailure;
+  // Retries belong to the caller, covering HTTP and empty SSE failures alike.
+  // Nesting retries here multiplied two visible attempts into six requests.
+  const pending = fetch(OPENROUTER_URL, {
+    method: "POST",
+    headers: requestHeaders(env),
+    body: JSON.stringify(body),
+    signal
+  });
+  const response = await (deadline ? deadline.run(pending) : pending);
+  if (response.ok) return response;
+  throw await (deadline ? deadline.run(parseFailure(response)) : parseFailure(response));
 }
 
 async function* readCompletionStream(response: Response, deadline: RequestDeadline): AsyncGenerator<string, void, void> {
@@ -262,9 +261,12 @@ export async function* streamChatText(
   signal?: AbortSignal
 ): AsyncGenerator<string, void, void> {
   let emittedAnyContent = false;
+  const startedAt = Date.now();
   try {
-    for (let streamAttempt = 0; streamAttempt < 2; streamAttempt += 1) {
-      const deadline = new RequestDeadline(25_000, 90_000, signal);
+    for (let streamAttempt = 0; streamAttempt < MAX_ATTEMPTS; streamAttempt += 1) {
+      const remainingMs = STREAM_TOTAL_MS - (Date.now() - startedAt);
+      if (remainingMs <= 0) throw new DOMException("The provider stopped responding.", "TimeoutError");
+      const deadline = new RequestDeadline(STREAM_IDLE_MS, remainingMs, signal);
       try {
         const response = await requestOpenRouter(env, {
           ...modelSelection(env),
@@ -272,7 +274,8 @@ export async function* streamChatText(
           max_tokens: 1000,
           temperature: 0.8,
           stream: true,
-          provider: { allow_fallbacks: true }
+          reasoning: { enabled: false },
+          provider: chatProviderSelection(env)
         }, deadline.signal, deadline);
         for await (const chunk of readCompletionStream(response, deadline)) {
           emittedAnyContent = true;
@@ -286,7 +289,7 @@ export async function* streamChatText(
           streamAttempt === 0 &&
           (!(error instanceof OpenRouterFailure) || error.retryable);
         if (!canRestart) throw error;
-        await waitBeforeRetry(streamAttempt, 0, signal);
+        await waitBeforeRetry(streamAttempt, error instanceof OpenRouterFailure ? error.retryAfterMs : 0, signal);
       } finally {
         deadline.dispose();
       }
@@ -304,7 +307,7 @@ export async function completeChatText(
 ): Promise<string> {
   const deadline = new RequestDeadline(45_000, 45_000);
   try {
-    for (let completionAttempt = 0; completionAttempt < 2; completionAttempt += 1) {
+    for (let completionAttempt = 0; completionAttempt < MAX_ATTEMPTS; completionAttempt += 1) {
       try {
         const response = await requestOpenRouter(env, {
           ...modelSelection(env),
@@ -312,6 +315,7 @@ export async function completeChatText(
           max_tokens: options.maxTokens ?? 2000,
           temperature: options.temperature ?? 0.2,
           stream: false,
+          reasoning: { enabled: false },
           provider: { allow_fallbacks: true }
         }, deadline.signal, deadline);
         const data = (await deadline.run(response.json())) as OpenRouterErrorPayload & {
@@ -335,7 +339,7 @@ export async function completeChatText(
           completionAttempt === 0 &&
           (!(error instanceof OpenRouterFailure) || error.retryable);
         if (!canRetry) throw error;
-        await waitBeforeRetry(completionAttempt, 0, deadline.signal);
+        await waitBeforeRetry(completionAttempt, error instanceof OpenRouterFailure ? error.retryAfterMs : 0, deadline.signal);
       }
     }
     throw new OpenRouterFailure(502, "The model returned an empty response.", true);

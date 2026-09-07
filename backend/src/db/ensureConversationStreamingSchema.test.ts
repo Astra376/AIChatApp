@@ -18,6 +18,10 @@ class FakeStatement {
   }
 
   async run() {
+    if (this.sql.startsWith("CREATE INDEX IF NOT EXISTS")) {
+      this.database.indexStatements.push(this.sql);
+      return { meta: { changes: 0 } };
+    }
     const match = this.sql.match(/^ALTER TABLE conversations ADD COLUMN ([a-z_]+)/);
     if (!match) {
       throw new Error(`Unexpected run query: ${this.sql}`);
@@ -31,9 +35,14 @@ class FakeStatement {
 class FakeD1Database {
   columns = ["id", "owner_user_id", "character_id", "updated_at", "started_at", "last_message_at"];
   alterStatements: string[] = [];
+  indexStatements: string[] = [];
 
   prepare(sql: string) {
     return new FakeStatement(this, sql.trim());
+  }
+
+  async batch(statements: FakeStatement[]) {
+    return Promise.all(statements.map(statement => statement.run()));
   }
 }
 
@@ -59,5 +68,8 @@ describe("ensureConversationStreamingSchema", () => {
     ]);
     expect(database.alterStatements).toContain("ALTER TABLE conversations ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0");
     expect(database.alterStatements).toContain("ALTER TABLE conversations ADD COLUMN has_unread_badge INTEGER NOT NULL DEFAULT 0");
+    expect(database.indexStatements).toHaveLength(2);
+    await ensureConversationStreamingSchema(env);
+    expect(database.indexStatements).toHaveLength(2);
   });
 });

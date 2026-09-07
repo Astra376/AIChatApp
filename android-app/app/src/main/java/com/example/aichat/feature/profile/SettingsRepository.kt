@@ -2,6 +2,7 @@ package com.example.aichat.feature.profile
 
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -22,6 +23,12 @@ class SettingsRepository @Inject constructor(
         preferences[THEME_MODE]?.let(ThemeMode::valueOf) ?: ThemeMode.DARK
     }
 
+    val streamingHaptics: Flow<Boolean> = context.dataStore.data.map { it[STREAMING_HAPTICS] ?: true }
+
+    suspend fun setStreamingHaptics(enabled: Boolean) {
+        context.dataStore.edit { it[STREAMING_HAPTICS] = enabled }
+    }
+
     suspend fun setThemeMode(themeMode: ThemeMode) {
         context.dataStore.edit { preferences ->
             preferences[THEME_MODE] = themeMode.name
@@ -29,6 +36,7 @@ class SettingsRepository @Inject constructor(
     }
 
     private companion object {
+        val STREAMING_HAPTICS = booleanPreferencesKey("streaming_haptics")
         val THEME_MODE: Preferences.Key<String> = stringPreferencesKey("theme_mode")
     }
 }

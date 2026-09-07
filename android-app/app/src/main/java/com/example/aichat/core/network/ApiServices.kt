@@ -66,6 +66,9 @@ interface CharacterApi {
 }
 
 interface HomeApi {
+    @GET("v1/home/trending")
+    suspend fun trendingSearches(): TrendingSearchesResponseDto
+
     @GET("v1/home/feed")
     suspend fun getFeed(@Query("cursor") cursor: String? = null): CursorPageDto<CharacterDto>
 

@@ -28,6 +28,22 @@ class NewHomeConversationTest {
         assertThat(mostRecentChatPerCharacter(chats).single().id).isEqualTo("a-2")
     }
 
+    @Test
+    fun mostRecentChatPerCharacter_countsUnreadAcrossAllSessions() {
+        val chats = listOf(
+            conversation(id = "old-a", characterId = "a", updatedAt = 100)
+                .copy(unreadCount = 3, hasUnreadBadge = true),
+            conversation(id = "new-a", characterId = "a", updatedAt = 300)
+                .copy(unreadCount = 2)
+        )
+
+        val result = mostRecentChatPerCharacter(chats).single()
+
+        assertThat(result.id).isEqualTo("new-a")
+        assertThat(result.unreadCount).isEqualTo(5)
+        assertThat(result.hasUnreadBadge).isTrue()
+    }
+
     private fun conversation(
         id: String,
         characterId: String,

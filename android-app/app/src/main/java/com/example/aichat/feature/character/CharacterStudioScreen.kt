@@ -34,6 +34,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.aichat.feature.voice.VoicePickerDialog
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -280,6 +284,10 @@ fun CharacterStudioRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showVoices by rememberSaveable { mutableStateOf(false) }
+    if (showVoices) VoicePickerDialog(onDismiss = { showVoices = false }, onSelected = { id ->
+        viewModel.updateDraft { it.copy(voiceId = id) }; showVoices = false
+    })
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
@@ -317,6 +325,7 @@ fun CharacterStudioRoute(
                 onDefinitionChanged = { value -> viewModel.updateDraft { it.copy(characterDefinition = value.take(32_000)) } },
                 onDefinitionPrivateChanged = { value -> viewModel.updateDraft { it.copy(definitionPrivate = value) } },
                 onOpenDetailsStep = viewModel::openDetailsStep,
+                onChooseVoice = { showVoices = true },
                 onGeneratePortraits = viewModel::generatePortraits,
                 onSelectPortrait = viewModel::selectPortrait,
                 onUploadPortrait = viewModel::uploadPortrait,
@@ -385,6 +394,7 @@ private fun CharacterCreateStepContent(
     onDefinitionChanged: (String) -> Unit,
     onDefinitionPrivateChanged: (Boolean) -> Unit,
     onOpenDetailsStep: (CharacterCreateStep) -> Unit,
+    onChooseVoice: () -> Unit,
     onGeneratePortraits: () -> Unit,
     onSelectPortrait: (String) -> Unit,
     onUploadPortrait: (Uri) -> Unit,
@@ -426,6 +436,8 @@ private fun CharacterCreateStepContent(
             onAddTagline = { onOpenDetailsStep(CharacterCreateStep.TAGLINE) },
             onAddDescription = { onOpenDetailsStep(CharacterCreateStep.DESCRIPTION) },
             onAddDefinition = { onOpenDetailsStep(CharacterCreateStep.DEFINITION) },
+            onChooseVoice = onChooseVoice,
+            voiceSelected = state.draft.voiceId != null,
             modifier = modifier
         )
         CharacterCreateStep.TAGLINE -> DetailTextStep(
@@ -753,6 +765,8 @@ private fun OptionalDetailsStep(
     onAddTagline: () -> Unit,
     onAddDescription: () -> Unit,
     onAddDefinition: () -> Unit,
+    onChooseVoice: () -> Unit,
+    voiceSelected: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -760,6 +774,7 @@ private fun OptionalDetailsStep(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         StepTitle("Add details")
+        DetailOptionButton(title = if (voiceSelected) "Change voice" else "Choose voice", body = "Official and community voices, or create your own.", onClick = onChooseVoice)
         DetailOptionButton(
             title = "Add Tagline",
             body = "This is that people see before they tap to chat with your character",

@@ -22,5 +22,6 @@ data class ActiveAssistantStream(
     val userMessageId: String? = null,
     val text: String = "",
     val accepted: Boolean = false,
-    val status: ActiveStreamStatus = ActiveStreamStatus.STREAMING
+    val status: ActiveStreamStatus = ActiveStreamStatus.STREAMING,
+    val remoteOnly: Boolean = false
 )

@@ -90,6 +90,47 @@ describe("streamChatText", () => {
     expect(chunks).toEqual(["recovered"]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("delivers content while the provider socket is still open", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({
+      start(value) { controller = value; }
+    }))));
+    const iterator = streamChatText(env, [{ role: "user", content: "hi" }]);
+    const first = iterator.next();
+    await vi.waitFor(() => expect(controller).toBeDefined());
+    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"first"}}]}\n\n'));
+    expect(await first).toEqual({ value: "first", done: false });
+    const second = iterator.next();
+    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":" second"}}]}\n\n'));
+    expect(await second).toEqual({ value: " second", done: false });
+    controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+    expect((await iterator.next()).done).toBe(true);
+  });
+
+  it("does not multiply HTTP failures into nested retry loops", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 503, message: "unavailable" } }), { status: 503 }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
+    await expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("requests nonthinking, low latency streaming and preserves an explicit provider restriction", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(
+      streamFromText('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n')
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    for await (const _ of streamChatText({ ...env, OPENROUTER_PROVIDERS: "venice" }, [])) { /* consume */ }
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request).toMatchObject({
+      stream: true,
+      reasoning: { enabled: false },
+      provider: { only: ["venice"], allow_fallbacks: false, sort: "latency" }
+    });
+  });
 });
 
 describe("stalled stream recovery", () => {
@@ -116,7 +157,7 @@ describe("stalled stream recovery", () => {
     }))));
     const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
     const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
-    await vi.advanceTimersByTimeAsync(52_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     await rejection;
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
@@ -131,9 +172,26 @@ describe("stalled stream recovery", () => {
     const chunks: string[] = [];
     const operation = (async () => { for await (const text of streamChatText(env, [])) chunks.push(text); })();
     const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
-    await vi.advanceTimersByTimeAsync(26_000);
+    await vi.advanceTimersByTimeAsync(13_000);
     await rejection;
     expect(chunks).toEqual(["partial"]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the entire stream even if content keeps arriving", async () => {
+    vi.useFakeTimers();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({
+      start(value) { controller = value; }
+    }))));
+    const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
+    const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
+    await vi.advanceTimersByTimeAsync(1);
+    for (let index = 0; index < 6; index++) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"word "}}]}\n\n'));
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    await rejection;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

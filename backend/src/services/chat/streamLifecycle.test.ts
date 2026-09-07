@@ -18,7 +18,7 @@ const conversationMocks = vi.hoisted(() => ({
   getMessageById: vi.fn(),
   insertMessage: vi.fn(),
   insertRegeneration: vi.fn(),
-  listMessages: vi.fn(),
+  listContextMessages: vi.fn(),
   listRegenerationsForConversation: vi.fn(),
   releaseConversationRun: vi.fn(),
   updateConversationActivity: vi.fn(),
@@ -178,18 +178,18 @@ function createContext(): {
 
 function configureTranscript(operation: Operation): void {
   if (operation === "SEND") {
-    conversationMocks.listMessages.mockResolvedValue([]);
+    conversationMocks.listContextMessages.mockResolvedValue([]);
     conversationMocks.getMessageById.mockResolvedValue(null);
     return;
   }
 
   if (operation === "CONTINUE") {
-    conversationMocks.listMessages.mockResolvedValue([userMessageRecord()]);
+    conversationMocks.listContextMessages.mockResolvedValue([userMessageRecord()]);
     return;
   }
 
   const latestAssistant = assistantMessageRecord();
-  conversationMocks.listMessages.mockResolvedValue([userMessageRecord(), latestAssistant]);
+  conversationMocks.listContextMessages.mockResolvedValue([userMessageRecord(), latestAssistant]);
   conversationMocks.getMessageById.mockImplementation(async (_env, messageId: string) =>
     messageId === ASSISTANT_MESSAGE_ID ? latestAssistant : null
   );
@@ -279,7 +279,7 @@ beforeEach(() => {
   conversationMocks.getConversationSummaryById.mockResolvedValue(summaryRecord());
   conversationMocks.insertMessage.mockResolvedValue(undefined);
   conversationMocks.insertRegeneration.mockResolvedValue(undefined);
-  conversationMocks.listMessages.mockResolvedValue([]);
+  conversationMocks.listContextMessages.mockResolvedValue([]);
   conversationMocks.listRegenerationsForConversation.mockResolvedValue([]);
   conversationMocks.releaseConversationRun.mockResolvedValue(undefined);
   conversationMocks.updateConversationActivity.mockResolvedValue(undefined);
@@ -295,6 +295,29 @@ beforeEach(() => {
 describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
   "%s stream lifecycle",
   (operation) => {
+    it("exposes accepted and incremental delta events before generation completes", async () => {
+      configureTranscript(operation);
+      const finish = deferred();
+      openRouterMocks.streamChatText.mockImplementation(async function* () {
+        yield "first chunk";
+        await finish.promise;
+        yield " second chunk";
+      });
+      const { context } = createContext();
+      const response = await startOperation(operation, context);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      expect(decoder.decode((await reader.read()).value)).toContain('"type":"accepted_');
+      expect(decoder.decode((await reader.read()).value)).toContain('"textDelta":"first chunk"');
+      expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(0);
+      expect(insertedRegenerations()).toHaveLength(0);
+      finish.resolve();
+      let remaining = "";
+      for (let next = await reader.read(); !next.done; next = await reader.read()) remaining += decoder.decode(next.value);
+      expect(remaining).toContain('"textDelta":" second chunk"');
+      expect(remaining).toContain('"type":"completed_');
+    });
+
     it("stops before the first chunk without deleting or fabricating transcript state", async () => {
       configureTranscript(operation);
       const provider = configureProvider("before first chunk");
@@ -420,7 +443,7 @@ describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
   }
 );
 
-it("uses a lease longer than the client timeout and also settles through ReadableStream.cancel", async () => {
+it("uses a bounded lease longer than the provider budget and also settles through ReadableStream.cancel", async () => {
   configureTranscript("CONTINUE");
   const provider = configureProvider("mid-stream");
   const { context, removeAbortListener } = createContext();
@@ -437,7 +460,7 @@ it("uses a lease longer than the client timeout and also settles through Readabl
   const claimCall = conversationMocks.claimConversationRun.mock.calls[0];
   const claimedAt = claimCall[3] as number;
   const expiresAt = claimCall[4] as number;
-  expect(expiresAt - claimedAt).toBeGreaterThan(125_000);
+  expect(expiresAt - claimedAt).toBe(75_000);
   expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(1);
   expect(removeAbortListener).toHaveBeenCalled();
 });

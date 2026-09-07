@@ -42,10 +42,9 @@ export async function insertCharacter(env: Env, input: {
   visibility: "public" | "unlisted" | "private";
   avatarUrl: string | null;
   now: number;
-}): Promise<void> {
+}, extraStatements: D1PreparedStatement[] = []): Promise<void> {
   await ensureCharacterSchema(env);
-  await run(
-    env.DB.prepare(
+  const statement = env.DB.prepare(
       `
       INSERT INTO characters (
         id, owner_user_id, name, tagline, greeting, description, system_prompt, definition_private, visibility,
@@ -67,8 +66,9 @@ export async function insertCharacter(env: Env, input: {
       input.now,
       input.now,
       input.now
-    )
-  );
+    );
+  if (extraStatements.length) await env.DB.batch([statement, ...extraStatements]);
+  else await run(statement);
 }
 
 export async function updateCharacter(env: Env, input: {
@@ -83,10 +83,9 @@ export async function updateCharacter(env: Env, input: {
   visibility: "public" | "unlisted" | "private";
   avatarUrl: string | null;
   now: number;
-}): Promise<void> {
+}, extraStatements: D1PreparedStatement[] = []): Promise<void> {
   await ensureCharacterSchema(env);
-  await run(
-    env.DB.prepare(
+  const statement = env.DB.prepare(
       `
       UPDATE characters
       SET name = ?, tagline = ?, greeting = ?, description = ?, system_prompt = ?, definition_private = ?, visibility = ?, avatar_url = ?, updated_at = ?
@@ -104,8 +103,9 @@ export async function updateCharacter(env: Env, input: {
       input.now,
       input.id,
       input.ownerUserId
-    )
-  );
+    );
+  if (extraStatements.length) await env.DB.batch([statement, ...extraStatements]);
+  else await run(statement);
 }
 
 export async function getCharacterById(env: Env, userId: string, characterId: string): Promise<CharacterRecord | null> {

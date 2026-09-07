@@ -30,6 +30,16 @@ import com.example.aichat.core.util.generateUlid
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -85,10 +95,87 @@ class ChatRepository @Inject constructor(
 ) {
     companion object {
         const val ORIGINAL_VARIANT_ID = "__original__"
-        private val STOP_RECONCILIATION_DELAYS_MS = longArrayOf(0L, 100L, 200L, 400L, 800L, 1_600L, 2_400L)
+        private val STOP_RECONCILIATION_DELAYS_MS = longArrayOf(0L, 150L, 350L)
     }
     private val activeStreams = MutableStateFlow<Map<String, ActiveAssistantStream>>(emptyMap())
     private val stopRequests = ConcurrentHashMap.newKeySet<String>()
+    // A navigation destination observes an operation; it does not own its lifetime.
+    private val operationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val generationJobs = ConcurrentHashMap<String, Job>()
+    private val remoteExpiryJobs = ConcurrentHashMap<String, Job>()
+    private val operationLocks = ConcurrentHashMap<String, Mutex>()
+    private val transcriptRevisions = ConcurrentHashMap<String, Long>()
+    private val mutations = MutableStateFlow<Set<String>>(emptySet())
+
+    fun observeMutationBusy(conversationId: String): Flow<Boolean> =
+        mutations.map { conversationId in it }
+
+    fun cancelAllOperations() {
+        operationScope.coroutineContext.cancelChildren()
+    }
+
+    private suspend fun <T> conversationOperation(
+        conversationId: String,
+        mutation: Boolean = false,
+        block: suspend () -> T
+    ): T {
+        val lock = operationLocks.getOrPut(conversationId) { Mutex() }
+        if (!lock.tryLock()) throw ChatRuleViolation("A chat update is already in progress.")
+        transcriptRevisions.merge(conversationId, 1L) { previous, _ -> previous + 1L }
+        if (mutation) mutations.update { it + conversationId }
+        try {
+            ensureNotStreaming(conversationId)
+            return block()
+        } finally {
+            if (mutation) mutations.update { it - conversationId }
+            lock.unlock()
+        }
+    }
+
+    private suspend fun streamOperation(conversationId: String, block: suspend () -> Unit): Result<Unit> =
+        operationScope.async {
+            captureResult {
+                conversationOperation(conversationId) {
+                    val job = currentCoroutineContext()[Job]!!
+                    generationJobs[conversationId] = job
+                    try {
+                        block()
+                    } finally {
+                        generationJobs.remove(conversationId, job)
+                    }
+                }
+            }
+        }.await()
+
+    suspend fun stopStreaming(conversationId: String, draftKey: String): Result<Unit> =
+        operationScope.async {
+            // Capture the job before inspecting its draft so a delayed stop cannot cancel a new reply.
+            val generationJob = generationJobs[conversationId]
+            val stream = currentActiveStream(conversationId)
+            if (stream?.draftKey != draftKey || stream.status == ActiveStreamStatus.STOPPED) {
+                return@async Result.success(Unit)
+            }
+            if (stream.status == ActiveStreamStatus.STREAMING) requestStop(conversationId, draftKey)
+            if (stream.remoteOnly) {
+                return@async captureResult {
+                    try {
+                        val stopped = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                            chatApi.stopReply(conversationId,
+                                com.example.aichat.core.network.StopChatRequestDto(checkNotNull(stream.runId)))
+                            true
+                        } ?: false
+                        if (!stopped) throw java.io.IOException("Couldn't reach the server to stop this reply. Please retry.")
+                        clearActiveStream(conversationId, draftKey)
+                        refreshConversation(conversationId).getOrThrow()
+                    } finally {
+                        clearStopRequest(draftKey)
+                        updateActiveStream(conversationId, draftKey) { it.copy(status = ActiveStreamStatus.STREAMING) }
+                    }
+                }
+            }
+            generationJob?.cancelAndJoin()
+            reconcileStoppedStream(conversationId, draftKey)
+        }.await()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeConversation(conversationId: String, messageLimit: Int): Flow<ConversationDetail?> {
@@ -130,26 +217,64 @@ class ChatRepository @Inject constructor(
 
     suspend fun refreshConversation(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
         captureResult {
+            val revision = transcriptRevisions[conversationId] ?: 0L
+            if (currentActiveStream(conversationId).blocksRemoteRefresh ||
+                operationLocks[conversationId]?.isLocked == true) return@captureResult
             val detail = conversationApi.getConversation(conversationId)
-            if (currentActiveStream(conversationId)?.status.isTransportBusy) return@captureResult
-            database.withTransaction {
-                if (currentActiveStream(conversationId)?.status.isTransportBusy) return@withTransaction
-                applyRemoteConversationDetail(detail)
-            }
-            val stoppedStream = currentActiveStream(conversationId)
-            if (
-                stoppedStream?.status == ActiveStreamStatus.STOPPED &&
-                stoppedResultIsCommitted(stoppedStream, detail)
-            ) {
-                clearActiveStream(conversationId, stoppedStream.draftKey)
+            val lock = operationLocks.getOrPut(conversationId) { Mutex() }
+            if (!lock.tryLock()) return@captureResult
+            try {
+                // A refresh begun before an edit/send must not restore its stale transcript.
+                if ((transcriptRevisions[conversationId] ?: 0L) != revision ||
+                    currentActiveStream(conversationId).blocksRemoteRefresh) return@captureResult
+                database.withTransaction { applyRemoteConversationDetail(detail) }
+                val stoppedStream = currentActiveStream(conversationId)
+                if (stoppedStream?.status == ActiveStreamStatus.STOPPED &&
+                    stoppedResultIsCommitted(stoppedStream, detail)) {
+                    clearActiveStream(conversationId, stoppedStream.draftKey)
+                }
+                syncRemoteRun(detail)
+            } finally {
+                lock.unlock()
             }
         }
+    }
+
+    private fun syncRemoteRun(detail: ConversationDetailDto) {
+        val current = currentActiveStream(detail.id)
+        if (current != null && !current.remoteOnly) return
+        val expiresAt = detail.activeRunExpiresAt
+        val runId = detail.activeRunId
+        if (runId == null || expiresAt == null || expiresAt <= System.currentTimeMillis()) {
+            current?.let { clearActiveStream(detail.id, it.draftKey) }
+            return
+        }
+        val draftKey = "remote-run-$runId"
+        setActiveStream(detail.id, ActiveAssistantStream(
+            conversationId = detail.id,
+            draftKey = draftKey,
+            runId = runId,
+            mode = ActiveStreamMode.CONTINUE,
+            accepted = true,
+            remoteOnly = true
+        ))
+        remoteExpiryJobs.remove(detail.id)?.cancel()
+        lateinit var expiryJob: Job
+        expiryJob = operationScope.launch(start = CoroutineStart.LAZY) {
+            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(1L))
+            if (remoteExpiryJobs.remove(detail.id, expiryJob)) {
+                clearActiveStream(detail.id, draftKey)
+                refreshConversation(detail.id)
+            }
+        }
+        remoteExpiryJobs[detail.id] = expiryJob
+        expiryJob.start()
     }
 
     suspend fun reconcileStoppedStream(conversationId: String, draftKey: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             try {
-                kotlinx.coroutines.withTimeout(12_000) {
+                kotlinx.coroutines.withTimeout(4_000) {
                     captureResult {
                         STOP_RECONCILIATION_DELAYS_MS.forEachIndexed { attempt, delayMillis ->
                             if (delayMillis > 0L) delay(delayMillis)
@@ -176,6 +301,7 @@ class ChatRepository @Inject constructor(
                                 detail.messages.none { it.id == stream.userMessageId } &&
                                 attempt >= 2
                             ) {
+                                markMessageFailed(stream.userMessageId)
                                 clearActiveStream(conversationId, draftKey)
                                 return@captureResult
                             }
@@ -196,8 +322,12 @@ class ChatRepository @Inject constructor(
             } finally {
                 val stream = currentActiveStream(conversationId)
                 if (stream?.draftKey == draftKey && stream.status == ActiveStreamStatus.STOPPING) {
-                    if (stream.text.isBlank()) clearActiveStream(conversationId, draftKey)
-                    else updateActiveStream(conversationId, draftKey) { it.copy(status = ActiveStreamStatus.STOPPED) }
+                    if (stream.text.isBlank()) {
+                        if (!stream.accepted && stream.userMessageId != null) {
+                            withContext(NonCancellable) { markMessageFailed(stream.userMessageId) }
+                        }
+                        clearActiveStream(conversationId, draftKey)
+                    } else updateActiveStream(conversationId, draftKey) { it.copy(status = ActiveStreamStatus.STOPPED) }
                 }
             }
         }
@@ -249,8 +379,8 @@ class ChatRepository @Inject constructor(
         return requested
     }
 
-    suspend fun sendMessage(conversationId: String, text: String): Result<Unit> = withContext(Dispatchers.IO) {
-        captureResult {
+    suspend fun sendMessage(conversationId: String, text: String): Result<Unit> =
+        streamOperation(conversationId) {
             val normalized = text.trim()
             if (normalized.isBlank()) throw IllegalArgumentException("Message can't be empty.")
             ensureNotStreaming(conversationId)
@@ -288,93 +418,121 @@ class ChatRepository @Inject constructor(
                 content = normalized
             )
         }
-    }
 
-    suspend fun editMessage(messageId: String, newContent: String): Result<Unit> = withContext(Dispatchers.IO) {
+    private suspend fun mutateMessage(
+        messageId: String,
+        block: suspend (MessageEntity) -> Unit
+    ): Result<Unit> = operationScope.async {
         captureResult {
-            val normalized = newContent.trim()
-            if (normalized.isBlank()) throw IllegalArgumentException("Message can't be empty.")
-
-            val message = requireMutableMessage(messageId)
-            chatApi.editMessage(messageId, EditMessageRequestDto(normalized))
-
-            database.withTransaction {
-                applyLocalEdit(message, normalized)
-                updateConversationMetadataFromTranscript(message.conversationId)
+            val original = messageDao.getById(messageId)
+                ?: throw IllegalArgumentException("Message not found.")
+            conversationOperation(original.conversationId, mutation = true) {
+                val message = requireMutableMessage(messageId)
+                block(message)
             }
+        }
+    }.await()
+
+    suspend fun editMessage(messageId: String, newContent: String): Result<Unit> = mutateMessage(messageId) { message ->
+        val normalized = newContent.trim()
+        if (normalized.isBlank()) throw IllegalArgumentException("Message can't be empty.")
+        val conversation = conversationDao.getById(message.conversationId)
+        val selected = message.selectedRegenerationId?.let { regenerationDao.getById(it) }
+        database.withTransaction {
+            applyLocalEdit(message, normalized)
+            updateConversationMetadataFromTranscript(message.conversationId)
+        }
+        try {
+            chatApi.editMessage(message.id, EditMessageRequestDto(normalized))
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                database.withTransaction {
+                    messageDao.update(message)
+                    selected?.let { regenerationDao.insert(it) }
+                    conversation?.let { conversationDao.upsert(it) }
+                }
+            }
+            throw error
         }
     }
 
-    suspend fun rewind(messageId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        captureResult {
-            val message = requireMutableMessage(messageId)
-            chatApi.rewind(messageId)
-
-            database.withTransaction {
-                messageDao.deleteAfter(message.conversationId, message.position)
-                deleteLocalOnlyMessages(message.conversationId)
-                updateConversationMetadataFromTranscript(message.conversationId)
+    suspend fun rewind(messageId: String): Result<Unit> = mutateMessage(messageId) { message ->
+        val conversation = conversationDao.getById(message.conversationId)
+        val removed = messageDao.getMessages(message.conversationId).filter {
+            it.position > message.position || it.sendState != MessageSendState.SENT.name
+        }
+        val removedIds = removed.map { it.id }.toSet()
+        val removedRegenerations = regenerationDao.getConversationRegenerations(message.conversationId)
+            .filter { it.messageId in removedIds }
+        database.withTransaction {
+            messageDao.deleteAfter(message.conversationId, message.position)
+            deleteLocalOnlyMessages(message.conversationId)
+            updateConversationMetadataFromTranscript(message.conversationId)
+        }
+        try {
+            // Keep the tapped identity even while the visible transcript changes.
+            chatApi.rewind(message.id)
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                database.withTransaction {
+                    messageDao.insertAll(removed)
+                    regenerationDao.insertAll(removedRegenerations)
+                    conversation?.let { conversationDao.upsert(it) }
+                }
             }
+            throw error
         }
     }
 
-    suspend fun regenerateLatestAssistant(messageId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        captureResult {
-            val message = requireMutableMessage(messageId)
-            ensureLatestAssistant(message)
+    suspend fun regenerateLatestAssistant(messageId: String): Result<Unit> {
+        val message = withContext(Dispatchers.IO) { messageDao.getById(messageId) }
+            ?: return Result.failure(IllegalArgumentException("Message not found."))
+        return streamOperation(message.conversationId) {
+            val current = requireMutableMessage(messageId)
+            ensureLatestAssistant(current)
             val draftKey = "regenerate-draft-${generateUlid()}"
-
-            setActiveStream(
-                message.conversationId,
-                ActiveAssistantStream(
-                    conversationId = message.conversationId,
-                    draftKey = draftKey,
-                    mode = ActiveStreamMode.REGENERATE,
-                    assistantMessageId = messageId,
-                    targetMessageId = messageId
-                )
-            )
-
-            consumeRegenerateStream(message.conversationId, draftKey, messageId)
+            setActiveStream(current.conversationId, ActiveAssistantStream(
+                conversationId = current.conversationId,
+                draftKey = draftKey,
+                mode = ActiveStreamMode.REGENERATE,
+                assistantMessageId = messageId,
+                targetMessageId = messageId
+            ))
+            consumeRegenerateStream(current.conversationId, draftKey, messageId)
         }
     }
 
-    suspend fun continueAssistant(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        captureResult {
-            ensureNotStreaming(conversationId)
-            val draftKey = "continue-draft-${generateUlid()}"
-
-            setActiveStream(
-                conversationId,
-                ActiveAssistantStream(
-                    conversationId = conversationId,
-                    draftKey = draftKey,
-                    mode = ActiveStreamMode.CONTINUE
-                )
-            )
-
-            consumeContinueStream(conversationId, draftKey)
-        }
+    suspend fun continueAssistant(conversationId: String): Result<Unit> = streamOperation(conversationId) {
+        val draftKey = "continue-draft-${generateUlid()}"
+        setActiveStream(conversationId, ActiveAssistantStream(
+            conversationId = conversationId,
+            draftKey = draftKey,
+            mode = ActiveStreamMode.CONTINUE
+        ))
+        consumeContinueStream(conversationId, draftKey)
     }
 
-    suspend fun selectRegeneration(messageId: String, regenerationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        captureResult {
-            val message = requireMutableMessage(messageId)
-            ensureLatestAssistant(message)
-            chatApi.selectRegeneration(
-                messageId,
-                SelectRegenerationRequestDto(regenerationId.takeUnless { it == ORIGINAL_VARIANT_ID })
-            )
-
-            database.withTransaction {
-                messageDao.update(
-                    message.copy(
-                        selectedRegenerationId = regenerationId,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-                updateConversationMetadataFromTranscript(message.conversationId)
+    suspend fun selectRegeneration(messageId: String, regenerationId: String): Result<Unit> = mutateMessage(messageId) { message ->
+        ensureLatestAssistant(message)
+        val selectedId = regenerationId.takeUnless { it == ORIGINAL_VARIANT_ID }
+        if (selectedId != null && regenerationDao.getById(selectedId)?.messageId != message.id) {
+            throw ChatRuleViolation("This reply version is unavailable.")
+        }
+        val conversation = conversationDao.getById(message.conversationId)
+        database.withTransaction {
+            messageDao.update(message.copy(selectedRegenerationId = selectedId, updatedAt = System.currentTimeMillis()))
+            updateConversationMetadataFromTranscript(message.conversationId)
+        }
+        try {
+            chatApi.selectRegeneration(message.id, SelectRegenerationRequestDto(selectedId))
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                database.withTransaction {
+                    messageDao.update(message)
+                    conversation?.let { conversationDao.upsert(it) }
+                }
             }
+            throw error
         }
     }
 
@@ -841,7 +999,8 @@ class ChatRepository @Inject constructor(
 
     private suspend fun applyLocalEdit(message: MessageEntity, newContent: String) {
         val now = System.currentTimeMillis()
-        if (message.role == MessageRole.ASSISTANT.name && message.selectedRegenerationId != null) {
+        if (message.role == MessageRole.ASSISTANT.name && message.selectedRegenerationId != null &&
+            message.selectedRegenerationId != ORIGINAL_VARIANT_ID) {
             val regeneration = regenerationDao.getById(message.selectedRegenerationId)
                 ?: throw IllegalStateException("Selected regeneration not found.")
             regenerationDao.insert(
@@ -944,12 +1103,18 @@ class ChatRepository @Inject constructor(
     private fun clearActiveStream(conversationId: String, draftKey: String) {
         if (conversationId.isBlank() || draftKey.isBlank()) return
         stopRequests.remove(draftKey)
+        val expiryJob = remoteExpiryJobs[conversationId]
+        var cleared = false
         activeStreams.update { streams ->
             if (streams[conversationId]?.draftKey == draftKey) {
+                cleared = true
                 streams - conversationId
             } else {
                 streams
             }
+        }
+        if (cleared && expiryJob != null && remoteExpiryJobs.remove(conversationId, expiryJob)) {
+            expiryJob.cancel()
         }
     }
 
@@ -973,6 +1138,9 @@ class ChatRepository @Inject constructor(
     }
 
     private suspend fun ensureLatestAssistant(message: MessageEntity) {
+        if (messageDao.getLocalOnlyMessages(message.conversationId).any {
+                it.role == MessageRole.USER.name && it.sendState == MessageSendState.PENDING.name
+            }) throw ChatRuleViolation("A newer message has already been sent.")
         val latestMessage = messageDao.getLatestMessage(message.conversationId)
             ?: throw ChatRuleViolation("Conversation is empty.")
         if (latestMessage.role != MessageRole.ASSISTANT.name || latestMessage.id != message.id) {
@@ -993,6 +1161,9 @@ class ChatRepository @Inject constructor(
             }
         }
     }
+
+    private val ActiveAssistantStream?.blocksRemoteRefresh: Boolean
+        get() = this != null && status.isTransportBusy && (!remoteOnly || status == ActiveStreamStatus.STOPPING)
 
     private val ActiveStreamStatus?.isTransportBusy: Boolean
         get() = this == ActiveStreamStatus.STREAMING || this == ActiveStreamStatus.STOPPING

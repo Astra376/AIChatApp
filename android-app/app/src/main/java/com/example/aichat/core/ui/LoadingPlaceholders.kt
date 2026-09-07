@@ -14,12 +14,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -28,16 +32,18 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.aichat.core.design.DesignMetrics
 
-private val PlaceholderBase = Color(0xFF242424)
-private val PlaceholderShine = Color(0xFF4B4B4B)
 
 fun Modifier.shimmerPlaceholder(
     shape: Shape = RoundedCornerShape(8.dp)
 ): Modifier = composed {
+    val placeholderBase = MaterialTheme.colorScheme.surfaceVariant
+    val placeholderShine = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
     val transition = rememberInfiniteTransition(label = "placeholder-shimmer")
     val offset = transition.animateFloat(
         initialValue = -700f,
@@ -51,11 +57,11 @@ fun Modifier.shimmerPlaceholder(
     clip(shape).background(
         Brush.linearGradient(
             colors = listOf(
-                PlaceholderBase,
-                PlaceholderBase,
-                PlaceholderShine,
-                PlaceholderBase,
-                PlaceholderBase
+                placeholderBase,
+                placeholderBase,
+                placeholderShine,
+                placeholderBase,
+                placeholderBase
             ),
             start = Offset(offset.value, 0f),
             end = Offset(offset.value + 360f, 360f)
@@ -85,15 +91,40 @@ fun ShimmerTextLine(
     )
 }
 
+/** Uses the same native text measurement as loaded content, including font scale. */
+@Composable
+fun ShimmerTextBlock(
+    style: TextStyle,
+    lineWidths: List<Float>,
+    modifier: Modifier = Modifier
+) {
+    val lineHeight = with(LocalDensity.current) { style.fontSize.toDp() * 0.7f }
+    Box(modifier = modifier.fillMaxWidth().clearAndSetSemantics {}) {
+        Text(
+            text = List(lineWidths.size) { "M" }.joinToString("\n"),
+            style = style,
+            color = Color.Transparent,
+            minLines = lineWidths.size,
+            maxLines = lineWidths.size
+        )
+        Column(modifier = Modifier.matchParentSize(), verticalArrangement = Arrangement.SpaceAround) {
+            lineWidths.forEach { width ->
+                ShimmerBox(Modifier.fillMaxWidth(width).height(lineHeight), RoundedCornerShape(lineHeight / 2))
+            }
+        }
+    }
+}
+
 @Composable
 fun CharacterSummaryCardPlaceholder(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    imageAspectRatio: Float = 1.25f
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         ShimmerBox(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1.25f),
+                .aspectRatio(imageAspectRatio),
             shape = RoundedCornerShape(DesignMetrics.portraitCorner)
         )
         Column(
@@ -101,11 +132,15 @@ fun CharacterSummaryCardPlaceholder(
                 .fillMaxWidth()
                 .padding(start = 0.dp, top = 8.dp, end = 12.dp, bottom = 12.dp)
         ) {
-            ShimmerTextLine(width = 96.dp, height = 20.dp)
-            Spacer(modifier = Modifier.height(8.dp))
-            ShimmerTextLine(width = 108.dp, height = 12.dp)
-            Spacer(modifier = Modifier.height(6.dp))
-            ShimmerTextLine(width = 74.dp, height = 12.dp)
+            ShimmerTextBlock(
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, lineHeight = 22.sp),
+                lineWidths = listOf(0.68f)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            ShimmerTextBlock(
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                lineWidths = listOf(0.86f, 0.62f)
+            )
         }
     }
 }
@@ -117,22 +152,28 @@ fun ChatListRowPlaceholder(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
     ) {
         ShimmerBox(modifier = Modifier.size(64.dp), shape = RoundedCornerShape(DesignMetrics.portraitCorner))
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(top = 5.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                ShimmerTextLine(width = 128.dp, height = 18.dp)
-                Spacer(modifier = Modifier.weight(1f))
+                ShimmerTextBlock(
+                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, lineHeight = 21.sp),
+                    lineWidths = listOf(0.72f),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
                 ShimmerTextLine(width = 44.dp, height = 11.dp)
             }
-            ShimmerTextLine(width = 170.dp, height = 14.dp)
+            ShimmerTextBlock(
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 18.sp),
+                lineWidths = listOf(0.82f)
+            )
         }
     }
 }

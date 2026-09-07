@@ -1,3 +1,4 @@
+import { characterVoiceStatement } from "../voice";
 import type { RequestContext } from "../../env";
 import {
   getCharacterById,
@@ -22,6 +23,7 @@ export interface CharacterWriteInput {
   definitionPrivate: boolean;
   visibility: "public" | "unlisted" | "private";
   avatarUrl: string | null;
+  voiceId?: string | null;
 }
 
 export function parseCharacterVisibility(value: string): CharacterWriteInput["visibility"] {
@@ -31,6 +33,7 @@ export function parseCharacterVisibility(value: string): CharacterWriteInput["vi
 
 export async function createOwnedCharacter(context: RequestContext, input: CharacterWriteInput) {
   const id = createId("character");
+  const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, id, input.voiceId, input.visibility)] : [];
   await insertCharacter(context.env, {
     id,
     ownerUserId: context.user!.userId,
@@ -43,7 +46,7 @@ export async function createOwnedCharacter(context: RequestContext, input: Chara
     visibility: input.visibility,
     avatarUrl: input.avatarUrl,
     now: Date.now()
-  });
+  }, voiceStatements);
   return getCharacter(context, id);
 }
 
@@ -56,6 +59,7 @@ export async function updateOwnedCharacter(context: RequestContext, characterId:
     forbidden("You can only edit your own characters.");
   }
 
+  const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, characterId, input.voiceId, input.visibility)] : [];
   await updateCharacter(context.env, {
     id: characterId,
     ownerUserId: context.user!.userId,
@@ -68,7 +72,7 @@ export async function updateOwnedCharacter(context: RequestContext, characterId:
     visibility: input.visibility,
     avatarUrl: input.avatarUrl,
     now: Date.now()
-  });
+  }, voiceStatements);
 
   return getCharacter(context, characterId);
 }

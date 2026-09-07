@@ -14,9 +14,10 @@ function fixture() {
   const state = { storage: { get: async (key: string) => data.get(key), put: async (key: string, value: unknown) => { data.set(key, value); },
     setAlarm: alarm, deleteAll: async () => data.clear() },
     blockConcurrencyWhile: (fn: () => Promise<void>) => { lock = lock.then(fn); return lock; } } as unknown as DurableObjectState;
-  const object = new ImageGenerationJob(state, {} as Env);
+  const head = vi.fn().mockResolvedValue(null);
+  const object = new ImageGenerationJob(state, { ASSETS: { head }, R2_PUBLIC_BASE_URL: "https://assets.example" } as unknown as Env);
   const input = { image: { model: IMAGE_MODELS.realistic, prompt: "a portrait" }, outputKey: "portraits/u/test.jpg", fallback: false };
-  return { object, data, input, alarm };
+  return { object, data, input, alarm, head };
 }
 it("claims a duplicate job once and exposes its completed image without another paid call", async () => {
   const { object, input, alarm } = fixture();
@@ -35,6 +36,14 @@ it("never resubmits a paid job if its isolate was interrupted while running", as
   data.set("job", { input, result: { status: "running" } });
   await object.alarm();
   expect(await (await object.fetch(new Request("https://job/status"))).json()).toMatchObject({status:"failed",error:"IMAGE_INTERRUPTED"});
+  expect(generateImageWithOpenRouter).not.toHaveBeenCalled();
+});
+it("recovers an image already saved before an interrupted completion write without buying it again", async () => {
+  const { object, data, input, head } = fixture();
+  data.set("job", { input, result: { status: "failed", error: "IMAGE_INTERRUPTED" } });
+  head.mockResolvedValue({ customMetadata: { model: IMAGE_MODELS.stylized, cost: "0.035" } });
+  const result = await (await object.fetch(new Request("https://job/status"))).json();
+  expect(result).toMatchObject({ status: "completed", model: IMAGE_MODELS.stylized, cost: 0.035, recovered: true });
   expect(generateImageWithOpenRouter).not.toHaveBeenCalled();
 });
 it("requires a live evaluation secret and fixed fixture id before any job can start", async () => {
@@ -56,5 +65,5 @@ it("lists the fixed comparison cases with a valid short-lived credential", async
     params: {}, request: new Request("https://worker/internal/image-evaluation", { headers: { Authorization: `Bearer ${token}` } }) } as unknown as RequestContext;
   const result = await evaluateImage(context);
   expect(result).toMatchObject({ run: "comparison" });
-  expect("cases" in result && result.cases).toHaveLength(24);
+  expect("cases" in result && result.cases).toHaveLength(25);
 });

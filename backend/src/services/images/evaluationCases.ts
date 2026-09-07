@@ -12,6 +12,7 @@ export const imageEvaluationCases: EvaluationCase[] = [
   { id: "anime_nano", label: "Anime · Nano Banana 2", image: { model: IMAGE_MODELS.nano, prompt: anime } },
   { id: "photo_preview_512", label: "FLUX · 512px capability", image: { model: IMAGE_MODELS.realistic, prompt: photo, size: "512x512", preview: true } },
   { id: "anime_preview_512", label: "Seedream · 512px capability", image: { model: IMAGE_MODELS.stylized, prompt: anime, size: "512x512", preview: true } },
+  { id: "anime_nano_preview", label: "Nano · 512px anime preview", image: { model: IMAGE_MODELS.nano, prompt: anime, preview: true } },
   ...(["joyful laughter", "quiet sadness", "contained anger"] as const).flatMap((emotion, index) => [
     { id: `photo_flux_e${index}`, label: `FLUX · ${emotion}`, reference: "photo_flux", image: { model: IMAGE_MODELS.realistic, prompt: expression(emotion) } },
     { id: `photo_nano_e${index}`, label: `Nano · ${emotion} (FLUX reference)`, reference: "photo_flux", image: { model: IMAGE_MODELS.nano, prompt: expression(emotion) } },

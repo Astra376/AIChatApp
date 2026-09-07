@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -30,7 +31,14 @@ class AppearancePolishTest {
         }
         compose.onNodeWithText("Meek").assertIsDisplayed()
         compose.onNodeWithContentDescription("default Meek icon").assertIsDisplayed()
-        compose.waitForIdle()
-        android.os.ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p /data/local/tmp/meek-appearance-dark.png")).use { it.readBytes() }
+        // Capture the Compose surface directly. A shell screen capture can catch
+        // the test activity's Android window transition even after Compose is idle.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val file = java.io.File(instrumentation.targetContext.cacheDir, "appearance-polish.png")
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(
+            "sh -c 'run-as com.example.aichat cat cache/appearance-polish.png > /data/local/tmp/meek-appearance-dark.png'"
+        )).use { it.readBytes() }
     }
 }

@@ -218,7 +218,14 @@ internal fun CharacterMemoryScreen(
                         when (selectedTab) {
                             0 -> {
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    listOf("Short term", "Mid term", "Long term").forEachIndexed { index, title -> FilterChip(selected = memoryTab == index, onClick = { memoryTab = index }, label = { Text(title) }) }
+                                    listOf("Short term", "Mid term", "Long term").forEachIndexed { index, title ->
+                                        FilterChip(
+                                            selected = memoryTab == index,
+                                            onClick = { memoryTab = index },
+                                            modifier = Modifier.weight(1f),
+                                            label = { Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+                                        )
+                                    }
                                 }
                                 when (memoryTab) {
                                     0 -> MemoryEditor("Short-term memory", "The current scene, goals and recent developments.", state.shortTerm, state.limits.shortTerm, 8, "Current scene and recent developments", enabled, onShortTermChanged)

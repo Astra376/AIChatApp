@@ -48,6 +48,11 @@ class AppearanceViewModel @Inject constructor(
         perform { repository.refresh(); mutableDraft.value=repository.preferences.value }
         viewModelScope.launch { characters.observeOwnedCharacters(auth.sessionState.value.profile?.userId.orEmpty()).collect { list -> mutableCharacters.value=list.filter { it.visibility==CharacterVisibility.PUBLIC } } }
     }
+    fun refreshAccess() { viewModelScope.launch {
+        try { repository.refresh(); mutableDraft.value = mutableDraft.value.copy(ultra = repository.preferences.value.ultra) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Throwable) { }
+    } }
     fun edit(value: AppearanceDto) { if(!mutableBusy.value) { mutableDraft.value=value; mutableStatus.value=null } }
     private fun perform(block: suspend ()->Unit) {
         if(mutableBusy.value) return
@@ -86,6 +91,7 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
     val status by viewModel.status.collectAsStateWithLifecycle()
     val characters by viewModel.charactersList.collectAsStateWithLifecycle()
     val context=LocalContext.current
+    androidx.lifecycle.compose.LifecycleResumeEffect(viewModel) { viewModel.refreshAccess(); onPauseOrDispose { } }
     var uploadTarget by remember { mutableStateOf("background") }
     var generationTarget by remember { mutableStateOf<String?>(null) }
     var prompt by remember { mutableStateOf("") }

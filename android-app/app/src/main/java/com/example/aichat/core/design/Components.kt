@@ -404,27 +404,12 @@ fun IconCircleButton(
     onClick: () -> Unit,
     icon: @Composable () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .size(containerSize)
-            .appOutlineSurface(
-                shape = CircleShape,
-                enabled = enabled,
-                selected = selected
-            )
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        CompositionLocalProvider(
-            LocalContentColor provides if (selected) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        ) {
-            icon()
-        }
-    }
+    androidx.compose.material3.IconButton(
+        onClick = onClick, enabled = enabled, modifier = modifier.size(containerSize),
+        colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
+            contentColor = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    ) { icon() }
 }
 
 @Composable

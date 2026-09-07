@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Snackbar
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.SnackbarHost
@@ -156,13 +157,7 @@ fun AppBackButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .size(AppChrome.compactControlSize)
-            .appOutlineSurface(shape = CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
+    IconButton(onClick = onClick, modifier = modifier.size(AppChrome.compactControlSize)) {
         AppIcon(
             icon = AppIcons.back,
             contentDescription = "Back",

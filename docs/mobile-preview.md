@@ -42,3 +42,32 @@ Stripe and Google Play checkout stay unavailable until real merchant products an
 Backend checks cover streaming, cancellation, exact transcript mutations, ownership, memory invalidation, persona precedence, group leases, image jobs, entitlements, regional prices and notification limits. Android CI compiles the app, runs unit tests, exercises Compose interactions on an API 35 emulator and records a chat screenshot before publishing the preview APK.
 
 Tests use controlled provider responses and do not send real emails, make purchases or charge paid model/image/voice requests. Real model quality, image identity consistency, device-specific performance and delivery timing require observation on actual devices and configured services. The psychology controls support fictional characterization; they are not a scientifically complete model of a human mind or a guarantee of indistinguishability from people.
+
+
+## Fast interaction update
+
+Screen changes and tab taps are immediate; navigation hides the keyboard and clears
+focus on the destination change. Native pager motion remains for reply swipes.
+The reply pager retains its page count during selection saves and lets Compose
+measure page height, avoiding the old conflicting scroll and clipping state.
+Icon buttons use plain native hit targets; bottom navigation has no capsule indicator.
+Streaming uses Android SEGMENT_TICK (KEYBOARD_TAP on older devices), with the existing
+haptics preference. Scene image crossfades are 180 ms.
+
+Ultra places large local plan cards above compact benefits and keeps checkout fixed
+at the bottom. In this phone preview, use **Ultra → Test subscription** to turn access
+on/off, or **Mock purchase** to try the selected plan. This updates account access on
+the server, never creates a payment or renewal, and does not require card details.
+`ULTRA_PREVIEW_ENABLED=true` explicitly enables the test endpoint. The endpoint and
+saved test entitlements stop granting access if the flag is removed or Stripe/Play
+credentials are configured. Real subscriptions and receipts are separate.
+
+Voice creation opened from Create returns to the original screen when closed.
+Its inline Ultra screen can unlock the editor without inserting another destination.
+
+Preview CI compiles Android, runs unit tests and only the changed pager/Ultra emulator
+checks. The workflow's **full_ui_tests** option retains the complete emulator suite.
+
+Implementation references: [Compose navigation transitions](https://developer.android.com/develop/ui/compose/animation/quick-guide),
+[native pager behavior](https://developer.android.com/develop/ui/compose/layouts/pager),
+[Android haptic feedback](https://developer.android.com/develop/ui/views/haptics/haptic-feedback).

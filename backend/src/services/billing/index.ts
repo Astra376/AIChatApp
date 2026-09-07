@@ -10,7 +10,9 @@ export async function ensureBillingSchema(env: Env): Promise<void> {
     pending = env.DB.batch([env.DB.prepare(`CREATE TABLE IF NOT EXISTS subscriptions (
       subscription_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, customer_id TEXT NOT NULL,
       status TEXT NOT NULL, price_id TEXT NOT NULL, expires_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL)`), env.DB.prepare("CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id)")]).then(() => undefined);
+      updated_at INTEGER NOT NULL)`), env.DB.prepare("CREATE INDEX IF NOT EXISTS subscriptions_user ON subscriptions(user_id)"),
+      env.DB.prepare(`CREATE TABLE IF NOT EXISTS preview_ultra (
+        user_id TEXT PRIMARY KEY, cadence TEXT NOT NULL, enabled INTEGER NOT NULL, updated_at INTEGER NOT NULL)`)]).then(() => undefined);
     schema.set(env.DB, pending);
     pending.catch(() => schema.delete(env.DB));
   }
@@ -32,7 +34,30 @@ async function hasStripeUltra(env: Env, userId: string): Promise<boolean> {
 }
 
 export async function hasUltra(env: Env, userId: string): Promise<boolean> {
-  return await hasStripeUltra(env, userId) || await hasPlayUltra(env, userId);
+  return await hasPreviewUltra(env, userId) || await hasStripeUltra(env, userId) || await hasPlayUltra(env, userId);
+}
+
+// Preview entitlements never create receipts, call payment providers, or survive
+// activation of real billing. All access checks use this same server-owned gate.
+export function previewBillingEnabled(env: Env): boolean {
+  return env.ULTRA_PREVIEW_ENABLED === "true" && !env.STRIPE_SECRET_KEY?.trim()
+    && !env.PLAY_SERVICE_ACCOUNT_JSON?.trim();
+}
+async function hasPreviewUltra(env: Env, userId: string): Promise<boolean> {
+  if (!previewBillingEnabled(env)) return false;
+  await ensureBillingSchema(env);
+  return await env.DB.prepare("SELECT user_id FROM preview_ultra WHERE user_id = ? AND enabled = 1")
+    .bind(userId).first() !== null;
+}
+export async function setPreviewUltra(context: RequestContext, enabled: boolean, cadence: Cadence = "monthly") {
+  assert(previewBillingEnabled(context.env), 404, "PREVIEW_UNAVAILABLE", "Subscription testing is unavailable.");
+  assert(typeof enabled === "boolean", 400, "INVALID_REQUEST", "Choose whether Ultra is enabled.");
+  assert(cadence === "monthly" || cadence === "annual", 400, "INVALID_REQUEST", "Choose monthly or annual billing.");
+  await ensureBillingSchema(context.env);
+  await context.env.DB.prepare(`INSERT INTO preview_ultra (user_id,cadence,enabled,updated_at) VALUES (?,?,?,?)
+    ON CONFLICT(user_id) DO UPDATE SET cadence=excluded.cadence, enabled=excluded.enabled, updated_at=excluded.updated_at`)
+    .bind(context.user!.userId, cadence, enabled ? 1 : 0, Date.now()).run();
+  return getUltra(context);
 }
 
 export async function requireUltra(env: Env, userId: string, feature = "This feature"): Promise<void> {
@@ -76,11 +101,11 @@ async function offersForRegion(context: RequestContext) {
   return { country, market: market.country, offers };
 }
 export async function getUltra(context: RequestContext) {
-  const [stripeActive, playActive, regional] = await Promise.all([hasStripeUltra(context.env, context.user!.userId),
-    hasPlayUltra(context.env, context.user!.userId), offersForRegion(context)]);
-  const active = stripeActive || playActive;
+  const [stripeActive, playActive, regional, previewActive] = await Promise.all([hasStripeUltra(context.env, context.user!.userId),
+    hasPlayUltra(context.env, context.user!.userId), offersForRegion(context), hasPreviewUltra(context.env, context.user!.userId)]);
+  const active = stripeActive || playActive || previewActive;
   const monthly = regional.offers[0];
-  return { active, billingProvider: stripeActive ? "stripe" : playActive ? "play" : null, playAvailable: playConfigured(context.env), available: regional.offers.some(offer => offer.available), ...regional,
+  return { active, billingProvider: stripeActive ? "stripe" : playActive ? "play" : previewActive ? "preview" : null, previewAvailable: previewBillingEnabled(context.env), previewActive, playAvailable: playConfigured(context.env), available: regional.offers.some(offer => offer.available), ...regional,
     model: context.env.OPENROUTER_ULTRA_MODEL || "deepseek/deepseek-v4-pro-0813",
     currency: monthly.currency, unitAmount: monthly.unitAmount, interval: monthly.interval, intervalCount: 1,
     capabilities: { customVoices: active, customFonts: active, profileCustomization: active, customBackgrounds: active,
@@ -171,6 +196,7 @@ export async function ensureUltraSchema(env: Env): Promise<void> { await Promise
 export function activeUltraUserIdsSql(env: Env): {sql:string;bindings:unknown[]} {
   const prices=allowedStripePriceIds(env), clauses:string[]=[], bindings:unknown[]=[];
   if(prices.length) { clauses.push(`SELECT user_id FROM subscriptions WHERE price_id IN (${prices.map(()=>"?").join(",")}) AND status IN ('active','trialing') AND expires_at>?`); bindings.push(...prices,Date.now()); }
+  if(previewBillingEnabled(env)) clauses.push("SELECT user_id FROM preview_ultra WHERE enabled=1");
   if(playConfigured(env)) { clauses.push("SELECT user_id FROM play_subscriptions WHERE product_id=? AND status='active' AND expires_at>? AND verified_at>?"); bindings.push(env.PLAY_ULTRA_PRODUCT_ID,Date.now(),Date.now()-3_600_000); }
   return {sql:clauses.length?clauses.join(" UNION "):"SELECT user_id FROM subscriptions WHERE 0",bindings};
 }

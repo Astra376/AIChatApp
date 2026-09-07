@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import com.example.aichat.core.design.AppTheme
 import com.example.aichat.core.model.AssistantRegeneration
 import com.example.aichat.core.model.CharacterSummary
@@ -100,6 +101,37 @@ class ChatScreenContentTest {
         composeRule.onNodeWithText("Original answer").assertIsDisplayed()
         composeRule.onNodeWithText("Different answer").assertDoesNotExist()
         composeRule.runOnIdle { assertEquals(0, selectedVersions) }
+    }
+
+    @Test
+    fun replyPager_staysCenteredWhileSaving_andReachesEveryVariant() {
+        val texts = listOf("Original answer", "First alternate\nWith another line", "Second alternate", "Third alternate\nWith a different ending")
+        var assistant = message(1, texts[0]).copy(regenerations = texts.drop(1).mapIndexed { index, text ->
+            AssistantRegeneration("variant-$index", "message-1", text, index.toLong() + 3)
+        })
+        val state = mutableStateOf(ChatUiState(conversation = conversationDetail(listOf(assistant))))
+        var selected = 0
+        composeRule.setContent {
+            TestChat(state.value, onSelectVariant = { _, index ->
+                selected = index
+                state.value = state.value.copy(isMutating = true)
+            })
+        }
+        val left = composeRule.onNodeWithText(texts[0]).fetchSemanticsNode().boundsInRoot.left
+        for (page in listOf(1, 2, 3, 2, 1, 0)) {
+            composeRule.onNodeWithTag("reply-variants").performTouchInput {
+                if (page > selected) swipeLeft() else swipeRight()
+            }
+            composeRule.onNodeWithText(texts[page]).assertIsDisplayed()
+            assertEquals("The selected reply must settle fully on screen while its save is pending", left,
+                composeRule.onNodeWithText(texts[page]).fetchSemanticsNode().boundsInRoot.left, 1f)
+            composeRule.runOnIdle {
+                assertEquals(page, selected)
+                assistant = assistant.copy(selectedRegenerationId = if (page == 0) null else "variant-${page - 1}")
+                state.value = state.value.copy(isMutating = false, conversation = conversationDetail(listOf(assistant)))
+            }
+            composeRule.onNodeWithText(texts[page]).assertIsDisplayed()
+        }
     }
 
     @Test

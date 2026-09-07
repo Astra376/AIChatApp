@@ -70,10 +70,13 @@ import kotlinx.coroutines.launch
     var creating by rememberSaveable { mutableStateOf(false) }
     var upgrade by rememberSaveable { mutableStateOf(false) }
     var handledCreate by rememberSaveable { mutableStateOf(false) }
-    BackHandler(enabled = creating || upgrade) { if (upgrade) { upgrade = false; model.refresh() } else creating = false }
+    fun leaveCreate() { if (startCreating) onBack() else creating = false }
+    BackHandler(enabled = creating || upgrade) {
+        if (upgrade && !startCreating) { upgrade = false; model.refresh() } else leaveCreate()
+    }
     fun beginCreate() {
         if (state.canCreate) creating = true
-        else if (onUpgradeUltra != null) onUpgradeUltra() else upgrade = true
+        else if (onUpgradeUltra != null && !startCreating) onUpgradeUltra() else upgrade = true
     }
     LaunchedEffect(startCreating, state.loading) {
         if (startCreating && !state.loading && !handledCreate) { handledCreate = true; beginCreate() }
@@ -86,12 +89,12 @@ import kotlinx.coroutines.launch
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sampleUri = it?.toString() }
     DisposableEffect(Unit) { onDispose { player.stop() } }
     if (upgrade) {
-        UltraRoute(onBack = { upgrade = false; model.refresh() }, modifier = modifier)
+        UltraRoute(onBack = { if (startCreating) onBack() else { upgrade = false; model.refresh() } }, modifier = modifier, onActivated = { upgrade = false; creating = true; model.refresh() })
         return
     }
     ScreenBackgroundBox(modifier = modifier) {
         LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Row { AppBackButton(onClick = { if (creating) creating = false else onBack() }); Text(if (creating) "Create voice" else "Voices", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(10.dp)) } }
+            item { Row { AppBackButton(onClick = { if (creating) leaveCreate() else onBack() }); Text(if (creating) "Create voice" else "Voices", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(10.dp)) } }
             if (creating) {
                 item { OutlinedTextField(name, { name = it.take(60) }, label = { Text("Voice name") }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
                 item { OutlinedTextField(description, { description = it.take(1000) }, label = { Text("Describe the voice") }, placeholder = { Text("Warm, expressive, lightly raspy, relaxed Australian accent…") }, minLines = 3, modifier = Modifier.fillMaxWidth()) }
@@ -99,7 +102,7 @@ import kotlinx.coroutines.launch
                 item { OutlinedButton(onClick = { picker.launch(arrayOf("audio/*", "video/*")) }, enabled = !state.creating) { Text(if (sampleUri == null) "Choose audio or video sample" else "Replace selected sample") } }
                 if (sampleUri != null) item { TextButton(onClick = { sampleUri = null }) { Text("Remove sample; use description") } }
                 item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text("Community voice"); Text("Other people can use it with their characters.", style = MaterialTheme.typography.bodySmall) }; Switch(public, { public = it }) } }
-                item { Button(onClick = { model.create(name, description, public, sampleUri?.let(Uri::parse)) { id -> creating = false; onSelected?.invoke(id) } }, enabled = !state.creating && state.available && state.canCreate && name.isNotBlank() && (description.trim().length >= 10 || sampleUri != null), modifier = Modifier.fillMaxWidth()) { Text(if (state.creating) "Creating voice…" else "Create voice") } }
+                item { Button(onClick = { model.create(name, description, public, sampleUri?.let(Uri::parse)) { id -> creating = false; if (onSelected != null) onSelected(id) else if (startCreating) onBack() } }, enabled = !state.creating && state.available && state.canCreate && name.isNotBlank() && (description.trim().length >= 10 || sampleUri != null), modifier = Modifier.fillMaxWidth()) { Text(if (state.creating) "Creating voice…" else "Create voice") } }
             } else {
                 item { Button(onClick = ::beginCreate, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) { Text("Create a voice  ✦ Ultra") } }
                 item { Text("Everyone can use official and community voices. Ultra includes custom voice creation.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

@@ -37,7 +37,7 @@ internal fun Context.isPlayInstallation(): Boolean = runCatching {
     if (android.os.Build.VERSION.SDK_INT >= 30) packageManager.getInstallSourceInfo(packageName).installingPackageName == "com.android.vending"
     else @Suppress("DEPRECATION") (packageManager.getInstallerPackageName(packageName) == "com.android.vending")
 }.getOrDefault(false)
-private tailrec fun Context.activity(): Activity? = when (this) { is Activity -> this; is ContextWrapper -> baseContext.activity(); else -> null }
+internal tailrec fun Context.activity(): Activity? = when (this) { is Activity -> this; is ContextWrapper -> baseContext.activity(); else -> null }
 
 @HiltViewModel class PlayBillingViewModel @Inject constructor(@ApplicationContext private val context: Context, retrofit: Retrofit) : ViewModel() {
     data class Offer(val label: String, val price: String, val detail: ProductDetails, val token: String)

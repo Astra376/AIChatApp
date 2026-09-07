@@ -1,6 +1,18 @@
 package com.example.aichat.feature.ultra
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.example.aichat.core.design.AppIcon
+import com.example.aichat.core.design.AppIconGlyph
+import com.example.aichat.core.design.AppIcons
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -40,12 +52,15 @@ import java.util.UUID
     val active: Boolean = false, val available: Boolean = false, val model: String = "",
     val currency: String? = null, val unitAmount: Long? = null, val interval: String? = null,
     val intervalCount: Int = 1, val offers: List<UltraOffer> = emptyList(),
-    val billingProvider: String? = null, val playAvailable: Boolean = false
+    val billingProvider: String? = null, val playAvailable: Boolean = false,
+    val previewAvailable: Boolean = false, val previewActive: Boolean = false
 )
 @Serializable data class CheckoutRequest(val requestKey: String, val cadence: String = "monthly")
+@Serializable data class PreviewRequest(val enabled: Boolean, val cadence: String = "monthly")
 @Serializable data class BillingUrl(val url: String)
 interface UltraApi {
     @GET("v1/ultra") suspend fun status(): UltraDto
+    @POST("v1/ultra/preview") suspend fun preview(@Body request: PreviewRequest): UltraDto
     @POST("v1/ultra/checkout") suspend fun checkout(@Body request: CheckoutRequest): BillingUrl
     @POST("v1/ultra/portal") suspend fun portal(): BillingUrl
 }
@@ -63,6 +78,16 @@ interface UltraApi {
             try { _state.value = _state.value.copy(info = api.status(), loading = false, error = null) }
             catch (error: CancellationException) { throw error }
             catch (error: Throwable) { _state.value = _state.value.copy(loading = false, error = error.userFacingMessage("Could not load Ultra.")) }
+        }
+    }
+    fun setPreview(enabled: Boolean, cadence: String) {
+        if (_state.value.busy || _state.value.info?.previewAvailable != true) return
+        refreshJob?.cancel()
+        _state.value = _state.value.copy(busy = true, error = null)
+        viewModelScope.launch {
+            try { _state.value = _state.value.copy(info = api.preview(PreviewRequest(enabled, cadence)), busy = false, loading = false) }
+            catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { _state.value = _state.value.copy(busy = false, error = error.userFacingMessage("Could not change the test subscription.")) }
         }
     }
     fun openBilling(cadence: String) {
@@ -92,75 +117,181 @@ internal fun formatUltraPrice(code: String, amount: Long): String = runCatching 
     format.format(amount / divisor)
 }.getOrDefault("${code.uppercase()} $amount")
 
-@Composable fun UltraRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
+internal data class UltraPlan(
+    val cadence: String, val price: String, val interval: String,
+    val available: Boolean, val savings: Int = 0
+)
+
+@Composable
+fun UltraRoute(onBack: () -> Unit, modifier: Modifier = Modifier, onActivated: (() -> Unit)? = null) {
     val model: UltraViewModel = hiltViewModel()
     val state by model.state.collectAsStateWithLifecycle()
     val uri = LocalUriHandler.current
-    val playInstallation = LocalContext.current.isPlayInstallation()
+    val context = LocalContext.current
+    val playInstallation = context.isPlayInstallation()
+    val playModel: PlayBillingViewModel? = if (playInstallation) hiltViewModel() else null
+    val play = playModel?.state?.collectAsStateWithLifecycle()?.value
     var cadence by rememberSaveable { mutableStateOf("annual") }
     LaunchedEffect(state.url) {
         state.url?.let { target -> model.openedUrl(runCatching { uri.openUri(target) }.isFailure) }
     }
+    LaunchedEffect(play?.verified) { if ((play?.verified ?: 0) > 0) model.refresh() }
+    LaunchedEffect(state.info?.active) { if (state.info?.active == true) onActivated?.invoke() }
     LifecycleResumeEffect(Unit) { model.refresh(); onPauseOrDispose { } }
+    val preview = state.info?.previewAvailable == true
+    val plans = if (playInstallation && !preview) play?.offers.orEmpty().map { offer ->
+        UltraPlan(if (offer.label == "Annual") "annual" else "monthly", offer.price, if (offer.label == "Annual") "year" else "month", true)
+    } else state.info?.offers.orEmpty().map { offer ->
+        UltraPlan(offer.cadence, formatUltraPrice(offer.currency, offer.unitAmount), offer.interval, offer.available || preview, offer.annualSavingsPercent)
+    }
+    UltraScreenContent(
+        state = state.copy(busy = state.busy || play?.busy == true, error = state.error ?: play?.message),
+        plans = plans, cadence = cadence, onSelectPlan = { cadence = it }, onBack = onBack,
+        onRefresh = { model.refresh(); if (playInstallation) playModel?.restore() },
+        onSetPreview = { model.setPreview(it, cadence) },
+        onPurchase = {
+            when {
+                preview -> model.setPreview(!state.info!!.previewActive, cadence)
+                state.info?.active == true -> model.openBilling(cadence)
+                playInstallation -> play?.offers?.firstOrNull { (it.label == "Annual") == (cadence == "annual") }?.let { offer ->
+                    context.activity()?.let { playModel?.buy(it, offer) }
+                }
+                else -> model.openBilling(cadence)
+            }
+        }, modifier = modifier
+    )
+}
+
+private data class UltraBenefit(val icon: AppIconGlyph, val title: String, val detail: String)
+private val ultraBenefits = listOf(
+    UltraBenefit(AppIcons.sparkle, "Meek Ultra model", "More capable replies, with your choice of chat model."),
+    UltraBenefit(AppIcons.memory, "Deeper memory", "64k long-term + 16k short-term memory, and richer scene summaries."),
+    UltraBenefit(AppIcons.chats, "Create custom voices", "Describe a voice or use an audio or video sample."),
+    UltraBenefit(AppIcons.create, "Richer characters & portraits", "Advanced personality controls and upgraded image generation."),
+    UltraBenefit(AppIcons.discover, "More discovery", "Give your public characters a boost in recommendations and search."),
+    UltraBenefit(AppIcons.profile, "A profile that feels like you", "Frames, banners, fonts, featured characters and profile widgets."),
+    UltraBenefit(AppIcons.edit, "Your chat, your style", "Custom chat fonts and generated or uploaded backgrounds."),
+    UltraBenefit(AppIcons.created, "Make Meek yours", "Alternative app icons and custom home screen shortcuts.")
+)
+
+@Composable
+internal fun UltraScreenContent(
+    state: UltraViewModel.State, plans: List<UltraPlan>, cadence: String,
+    onSelectPlan: (String) -> Unit, onBack: () -> Unit, onRefresh: () -> Unit,
+    onSetPreview: (Boolean) -> Unit, onPurchase: () -> Unit, modifier: Modifier = Modifier
+) {
+    val info = state.info
+    val selected = plans.firstOrNull { it.cadence == cadence }
+    val preview = info?.previewAvailable == true
+    val active = info?.active == true
     ScreenBackgroundBox(modifier = modifier) {
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
-                .padding(horizontal = 20.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Row { AppBackButton(onClick = onBack); Text("Ultra", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(10.dp)) }
-            Text(if (state.info?.active == true) "You're on Ultra" else "Make it your world", style = MaterialTheme.typography.headlineLarge)
-            Text("Deeper conversations. Characters with more to remember. More ways to make Meek yours.", style = MaterialTheme.typography.titleMedium)
-            listOf(
-                "Meek Ultra" to "Choose our most capable chat model whenever you want.",
-                "More room to remember" to "16,000 characters of short-term memory and 64,000 of long-term memory, plus a richer mid-term summary.",
-                "Create a voice" to "Design voices with a description or a clear audio or video sample. Share them with the community or keep them private.",
-                "Bring characters to life" to "More detailed character creation and upgraded portraits. Give your creations greater visibility in discovery.",
-                "Your profile, your style" to "Choose fonts, frames, banners, featured characters and profile widgets.",
-                "Make Meek yours" to "Chat fonts, app backgrounds and alternative app icons."
-            ).forEach { (title, detail) ->
-                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(title, style = MaterialTheme.typography.titleMedium)
-                        Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            topBar = {
+                Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AppBackButton(onClick = onBack)
+                    Text("Meek Ultra", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    AppIcon(AppIcons.sparkle, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                }
+            },
+            bottomBar = {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                        Button(
+                            onClick = onPurchase, enabled = !state.loading && !state.busy && (active || selected?.available == true),
+                            modifier = Modifier.fillMaxWidth().height(56.dp).testTag("ultra-purchase"), shape = RoundedCornerShape(16.dp)
+                        ) {
+                            if (state.busy) {
+                                CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            Text(when {
+                                state.busy -> "Updating…"
+                                preview && info?.previewActive == true -> "Disable test Ultra"
+                                preview -> "Mock purchase · ${if (cadence == "annual") "Annual" else "Monthly"}"
+                                active -> "Manage subscription"
+                                else -> "Get Ultra · ${selected?.price ?: "Choose a plan"}"
+                            }, fontWeight = FontWeight.Bold)
+                        }
+                        Text(
+                            when {
+                                preview -> "Testing only · No payment or automatic renewal"
+                                active -> "Your subscription is active."
+                                selected?.available == true -> "${selected.price} / ${selected.interval}. Renews automatically. Cancel anytime."
+                                else -> "Purchases aren't available yet."
+                            }, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
                     }
                 }
             }
-            if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            state.info?.let { info ->
-                if (info.active) {
-                    Button(onClick = { model.openBilling(cadence) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (state.busy) "Opening…" else "Manage subscription")
-                    }
-                } else if (playInstallation) {
-                    PlaySubscriptionControls(onVerified = model::refresh)
-                    if (!info.playAvailable) Text("Subscriptions are not available yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    info.offers.forEach { offer ->
-                        Surface(
-                            onClick = { cadence = offer.cadence }, shape = MaterialTheme.shapes.large,
-                            color = if (cadence == offer.cadence) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow
-                        ) {
-                            Row(Modifier.fillMaxWidth().padding(12.dp)) {
-                                RadioButton(selected = cadence == offer.cadence, onClick = null)
-                                Column(Modifier.padding(start = 12.dp)) {
-                                    Text(if (offer.cadence == "annual") "Annual · save 30%" else "Monthly", style = MaterialTheme.typography.titleMedium)
-                                    Text("${formatUltraPrice(offer.currency, offer.unitAmount)} / ${offer.interval}")
-                                }
-                            }
+        ) { padding ->
+            LazyColumn(
+                Modifier.fillMaxSize().padding(padding).testTag("ultra-content"),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    Text(if (active) "Your world, upgraded." else "Go beyond ordinary.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text("More imagination. More memory. More you.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+                }
+                if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                if (plans.isNotEmpty()) item {
+                    BoxWithConstraints {
+                        val stack = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.25f
+                        val ordered = plans.sortedBy { if (it.cadence == "annual") 0 else 1 }
+                        if (stack) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ordered.forEach { plan -> UltraPlanCard(plan, cadence == plan.cadence, !state.busy, { onSelectPlan(plan.cadence) }, Modifier.fillMaxWidth()) }
+                        } else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            ordered.forEach { plan -> UltraPlanCard(plan, cadence == plan.cadence, !state.busy, { onSelectPlan(plan.cadence) }, Modifier.weight(1f)) }
                         }
                     }
-                    val available = info.offers.firstOrNull { it.cadence == cadence }?.available == true
-                    if (!available) Text("Subscriptions are not available yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = { model.openBilling(cadence) }, enabled = !state.busy && available, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (state.busy) "Opening…" else "Get Ultra")
-                    }
-                    if (available) Text("Renews automatically. Annual plans are billed once per year. Review the total and payment terms at checkout; manage or cancel here.", style = MaterialTheme.typography.bodySmall)
                 }
+                if (preview) item {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Test subscription", fontWeight = FontWeight.Bold)
+                            Text(if (info?.previewActive == true) "Ultra enabled for this account" else "Enable Ultra without paying", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = info?.previewActive == true, onCheckedChange = onSetPreview, enabled = !state.busy, modifier = Modifier.testTag("ultra-test-toggle"))
+                    }
+                }
+                item { Text("Everything included", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)) }
+                items(ultraBenefits, key = { it.title }) { benefit ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        AppIcon(benefit.icon, null, size = 24.dp, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(benefit.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            Text(benefit.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                item { TextButton(onClick = onRefresh, enabled = !state.busy) { Text("Restore or refresh subscription") } }
             }
-            TextButton(onClick = model::refresh, enabled = !state.busy) { Text("Refresh subscription status") }
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun UltraPlanCard(plan: UltraPlan, selected: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    Surface(
+        onClick = onClick, enabled = enabled, modifier = modifier.testTag("ultra-plan-${plan.cadence}"),
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(Modifier.padding(16.dp).heightIn(min = 150.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (plan.cadence == "annual") "Annual" else "Monthly", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                RadioButton(selected = selected, onClick = null, modifier = Modifier.size(22.dp))
+            }
+            Text(if (plan.savings > 0) "SAVE ${plan.savings}%" else "FLEXIBLE BILLING", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(6.dp))
+            Text(plan.price, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+            Text("per ${plan.interval}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

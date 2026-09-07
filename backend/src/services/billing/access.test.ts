@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env, RequestContext } from "../../env";
-import { activeUltraUserIdsSql, createCheckout, ensureUltraSchema, getUltra, hasUltra, requireUltra } from "./index";
+import { activeUltraUserIdsSql, createCheckout, ensureUltraSchema, getUltra, hasUltra, requireUltra, setPreviewUltra } from "./index";
 import { annualPrice, billingCountry, marketForCountry, priceCatalog, ULTRA_MARKETS } from "./pricing";
 import { playAccountId, validatePlayPurchase, verifyPlayPurchase } from "./play";
 
@@ -130,4 +130,38 @@ describe("Play receipt validation", () => {
       expect(await hasUltra(env,"owner")).toBe(false);
     } finally {db.close();}
   });
+});
+
+
+it("mock purchase and disable update account access and ranking without a payment call", async () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const { db, env, context } = database({ ULTRA_PREVIEW_ENABLED: "true" });
+  try {
+    expect(await getUltra(context)).toMatchObject({ active: false, previewAvailable: true });
+    for (const cadence of ["annual", "monthly"] as const) {
+      expect(await setPreviewUltra(context, true, cadence)).toMatchObject({ active: true, previewActive: true, billingProvider: "preview" });
+      await requireUltra(env, "owner");
+      expect(await hasUltra(env, "someone_else")).toBe(false);
+      const query = activeUltraUserIdsSql(env);
+      expect(db.prepare(query.sql).all(...query.bindings as any[])).toEqual([{ user_id: "owner" }]);
+      expect(await setPreviewUltra(context, false)).toMatchObject({ active: false, previewActive: false });
+      await expect(requireUltra(env, "owner")).rejects.toMatchObject({ code: "ULTRA_REQUIRED" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { db.close(); }
+});
+
+it("never accepts a preview toggle or saved preview access after payment activation", async () => {
+  const { db, env, context } = database({ ULTRA_PREVIEW_ENABLED: "true" });
+  try {
+    await setPreviewUltra(context, true);
+    for (const changes of [{ ULTRA_PREVIEW_ENABLED: "false" }, { STRIPE_SECRET_KEY: "sk_live_example" }, { PLAY_SERVICE_ACCOUNT_JSON: "configured" }]) {
+      const configuredEnv = { ...env, ...changes };
+      expect(await hasUltra(configuredEnv, "owner")).toBe(false);
+      await expect(setPreviewUltra({ ...context, env: configuredEnv }, true)).rejects.toMatchObject({ code: "PREVIEW_UNAVAILABLE" });
+      const query = activeUltraUserIdsSql(configuredEnv);
+      expect(db.prepare(query.sql).all(...query.bindings as any[])).toEqual([]);
+    }
+    await expect(setPreviewUltra(context, "true" as unknown as boolean)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  } finally { db.close(); }
 });

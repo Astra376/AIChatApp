@@ -1,7 +1,6 @@
 package com.example.aichat.feature.chat
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -26,7 +25,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -45,7 +43,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.animation.Crossfade
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,7 +67,6 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
@@ -826,7 +822,7 @@ private fun ChatSceneBackground(
         requestedUrl?.let {
             ImageRequest.Builder(context)
                 .data(it)
-                .crossfade(700)
+                .crossfade(180)
                 .build()
         }
     }
@@ -855,7 +851,7 @@ private fun ChatSceneBackground(
         )
         if (emotionPortraitUrl != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context).data(emotionPortraitUrl).crossfade(800).build(),
+                model = ImageRequest.Builder(context).data(emotionPortraitUrl).crossfade(180).build(),
                 contentDescription = null, contentScale = ContentScale.Crop,
                 alignment = Alignment.BottomCenter,
                 modifier = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
@@ -1084,24 +1080,19 @@ private fun ChatComposerBar(
                     else -> onContinue
                 }
             ) {
-                Crossfade(
-                    targetState = when {
+                AppIcon(
+                    icon = when {
                         isStreaming || isStopping -> AppIcons.stop
                         useContinue -> AppIcons.forward
                         else -> AppIcons.send
                     },
-                    label = "chat-send-icon"
-                ) { icon ->
-                    AppIcon(
-                        icon,
-                        contentDescription = when {
-                            isStreaming -> "Stop response"
-                            isStopping -> "Stopping response"
-                            useContinue -> "Continue"
-                            else -> "Send"
-                        }
-                    )
-                }
+                    contentDescription = when {
+                        isStreaming -> "Stop response"
+                        isStopping -> "Stopping response"
+                        useContinue -> "Continue"
+                        else -> "Send"
+                    }
+                )
             }
         }
     }
@@ -1229,7 +1220,7 @@ private fun MessageBubble(
         }
     }
     val currentIndex = if (variants.size == message.variantCount()) message.variantIndex() else 0
-    val hasGenerationPage = isLatestAssistant && !isUser && (variantControlsEnabled || showGenerationPage)
+    val hasGenerationPage = isLatestAssistant && !isUser
 
     if (isLatestAssistant && (variants.size > 1 || hasGenerationPage)) {
         VariantMessagePager(
@@ -1294,133 +1285,83 @@ private fun VariantMessagePager(
 ) {
     val generationPage = variants.size
     val pageCount = variants.size + if (hasGenerationPage) 1 else 0
-    val pagerState = rememberPagerState(
-        initialPage = currentIndex,
-        pageCount = { pageCount }
-    )
-    val coroutineScope = rememberCoroutineScope()
-    var committedPage by remember(variants.size) {
-        mutableStateOf(currentIndex.coerceIn(variants.indices))
-    }
-    var settledVisualPage by remember(variants.size, hasGenerationPage) {
-        mutableStateOf(currentIndex.coerceIn(variants.indices))
-    }
-    var generationRequested by remember(variants.size, hasGenerationPage) {
-        mutableStateOf(false)
-    }
-    var synchronizingPage by remember { mutableStateOf(false) }
-    LaunchedEffect(currentIndex, showingGeneration, pageCount) {
-        val target = if (showingGeneration && hasGenerationPage) generationPage else currentIndex
-        committedPage = currentIndex.coerceIn(variants.indices)
-        if (target != pagerState.currentPage && !pagerState.isScrollInProgress) {
-            synchronizingPage = true
-            try { pagerState.animateScrollToPage(target.coerceIn(0, pageCount - 1)) }
-            finally { synchronizingPage = false }
+    val pagerState = rememberPagerState(initialPage = currentIndex, pageCount = { pageCount })
+    val scope = rememberCoroutineScope()
+    val latestSelect by rememberUpdatedState(onSelectVariant)
+    val latestGenerate by rememberUpdatedState(onSelectNextVariant)
+    val latestEnabled by rememberUpdatedState(variantControlsEnabled)
+    val latestGenerationEnabled by rememberUpdatedState(generationRequestEnabled)
+    val latestGenerationPage by rememberUpdatedState(generationPage)
+    val latestHasGeneration by rememberUpdatedState(hasGenerationPage)
+    var reportedPage by remember { mutableStateOf(currentIndex) }
+    var generationRequested by remember { mutableStateOf(false) }
+
+    // The pager owns the visible selection. Saving it must never resize the
+    // page set or drive another scroll back to an older server selection.
+    LaunchedEffect(showingGeneration) {
+        if (showingGeneration && hasGenerationPage) {
+            generationRequested = true
+            pagerState.scrollToPage(generationPage)
         }
     }
-    var pageHeights by remember(pageCount) {
-        mutableStateOf(List(pageCount) { 0 })
+    LaunchedEffect(variantControlsEnabled, showingGeneration, variants.size) {
+        if (variantControlsEnabled && !showingGeneration && generationRequested) {
+            generationRequested = false
+            // An appended reply already occupies the former draft page. A
+            // stopped/failed request without a saved reply returns to its source.
+            if (pagerState.currentPage >= variants.size) {
+                pagerState.scrollToPage(currentIndex.coerceIn(variants.indices))
+            }
+            reportedPage = pagerState.currentPage
+        }
     }
-
-    LaunchedEffect(pagerState, variants.size, hasGenerationPage, generationRequestEnabled) {
-        snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }.collect { (page, isScrollInProgress) ->
-            if (isScrollInProgress) return@collect
-            // Generation locks interactions, but its visible page must still own
-            // the measured height as newly streamed lines arrive.
-            settledVisualPage = page.coerceIn(0, pageCount - 1)
-            if (synchronizingPage || !variantControlsEnabled) return@collect
-            when {
-                page == generationPage && hasGenerationPage -> {
-                    settledVisualPage = page
-                    if (generationRequestEnabled && !generationRequested) {
+    LaunchedEffect(pagerState) {
+        snapshotFlow { Triple(pagerState.settledPage, pagerState.isScrollInProgress, latestEnabled) }
+            .collect { (page, scrolling, enabled) ->
+                if (scrolling || !enabled) return@collect
+                if (page == latestGenerationPage && latestHasGeneration) {
+                    if (latestGenerationEnabled && !generationRequested) {
                         generationRequested = true
-                        onSelectNextVariant()
+                        latestGenerate()
                     }
-                }
-                page in variants.indices -> {
-                    val shouldPersistSelection = page != committedPage
-                    settledVisualPage = page
-                    generationRequested = false
-                    if (shouldPersistSelection) {
-                        committedPage = page
-                        onSelectVariant(page)
-                    }
+                } else if (page < latestGenerationPage && page != reportedPage) {
+                    reportedPage = page
+                    latestSelect(page)
                 }
             }
-        }
     }
 
-    // Let Compose animate between the settled pages' measured heights, using
-    // its default animation alongside HorizontalPager's native page motion.
-    val density = LocalDensity.current
-    val settledHeightPx = pageHeights.getOrElse(settledVisualPage) { 0 }
-    val isSettledHeightMeasured = settledHeightPx > 0
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize()
-            .then(
-                if (isSettledHeightMeasured) {
-                    Modifier.height(with(density) { settledHeightPx.toDp() })
-                } else {
-                    Modifier
+    HorizontalPager(
+        state = pagerState,
+        modifier = modifier.fillMaxWidth().testTag("reply-variants"),
+        userScrollEnabled = variantControlsEnabled,
+        verticalAlignment = Alignment.Top
+    ) { page ->
+        val isGenerationPage = page == generationPage
+        MessageVariantPage(
+            modifier = Modifier.fillMaxWidth(),
+            text = if (isGenerationPage) generationPageText else variants[page],
+            pageIndex = page.coerceAtMost(variants.lastIndex),
+            pageCount = variants.size,
+            isUser = isUser,
+            avatarName = avatarName,
+            avatarUrl = avatarUrl,
+            bubbleColor = bubbleColor,
+            showTypingIndicator = isGenerationPage && (generationPageLoading || generationPageText.isBlank()),
+            showVariantControls = !isGenerationPage,
+            variantControlsEnabled = variantControlsEnabled,
+            onLongPress = onLongPress,
+            onPrevious = {
+                if (!pagerState.isScrollInProgress && pagerState.currentPage > 0) {
+                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
                 }
-            )
-            .clipToBounds()
-    ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (isSettledHeightMeasured) {
-                        Modifier.wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    } else {
-                        Modifier
-                    }
-                ),
-            userScrollEnabled = variantControlsEnabled,
-            pageSpacing = 12.dp,
-            beyondViewportPageCount = 0,
-            verticalAlignment = Alignment.Top
-        ) { page ->
-            val isGenerationPage = page == generationPage
-            MessageVariantPage(
-                modifier = Modifier.onSizeChanged { size ->
-                    if (page in pageHeights.indices && pageHeights[page] != size.height) {
-                        pageHeights = pageHeights.toMutableList().also { heights ->
-                            heights[page] = size.height
-                        }
-                    }
-                },
-                text = if (isGenerationPage) generationPageText else variants[page],
-                pageIndex = page.coerceAtMost(variants.lastIndex),
-                pageCount = variants.size,
-                isUser = isUser,
-                avatarName = avatarName,
-                avatarUrl = avatarUrl,
-                bubbleColor = bubbleColor,
-                showTypingIndicator = isGenerationPage && (generationPageLoading || generationPageText.isBlank()),
-                showVariantControls = !isGenerationPage,
-                variantControlsEnabled = variantControlsEnabled,
-                onLongPress = onLongPress,
-                onPrevious = {
-                    if (pagerState.currentPage > 0) {
-                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
-                    } else {
-                        onSelectPreviousVariant()
-                    }
-                },
-                onNext = {
-                    if (pagerState.currentPage < variants.lastIndex) {
-                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
-                    } else {
-                        coroutineScope.launch { pagerState.animateScrollToPage(generationPage) }
-                    }
+            },
+            onNext = {
+                if (!pagerState.isScrollInProgress && pagerState.currentPage < pageCount - 1) {
+                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                 }
-            )
-        }
+            }
+        )
     }
 }
 
@@ -1704,8 +1645,8 @@ internal fun rememberTypedStreamText(
                 if (latestHaptics && latestAnimate) {
                     view.performHapticFeedback(
                         if (android.os.Build.VERSION.SDK_INT >= 34)
-                            android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
-                        else android.view.HapticFeedbackConstants.CLOCK_TICK
+                            android.view.HapticFeedbackConstants.SEGMENT_TICK
+                        else android.view.HapticFeedbackConstants.KEYBOARD_TAP
                     )
                 }
             }

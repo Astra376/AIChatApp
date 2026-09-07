@@ -1,6 +1,8 @@
 package com.example.aichat.navigation
 
 import android.net.Uri
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -22,6 +24,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
@@ -151,6 +155,16 @@ private fun NavController.backFrom(source: NavBackStackEntry) {
 @Composable
 private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl: String?, appViewModel: AppViewModel, notificationUri: Uri?, onNotificationConsumed: () -> Unit) {
     val nav = rememberNavController()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    DisposableEffect(nav, keyboard, focus) {
+        val listener = NavController.OnDestinationChangedListener { _, _, _ ->
+            keyboard?.hide()
+            focus.clearFocus(force = true)
+        }
+        nav.addOnDestinationChangedListener(listener)
+        onDispose { nav.removeOnDestinationChangedListener(listener) }
+    }
     val entry by nav.currentBackStackEntryAsState()
     val conversationId = if (entry?.destination?.route == "chat/{conversationId}") entry?.arguments?.getString("conversationId") else null
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -189,7 +203,11 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
             onNotificationConsumed()
         }
     }
-    NavHost(navController = nav, startDestination = "main_tabs") {
+    NavHost(
+        navController = nav, startDestination = "main_tabs",
+        enterTransition = { EnterTransition.None }, exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None }, popExitTransition = { ExitTransition.None }
+    ) {
         composable("main_tabs") { entry ->
             MainTabs(profileName, profileAvatarUrl, onOpen = { nav.openFrom(entry, it) })
         }
@@ -333,7 +351,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                             when (destination) {
                                 MainDestination.Studio -> { showCreate = true }
                                 MainDestination.Ultra -> onOpen("ultra")
-                                else -> scope.launch { pager.animateScrollToPage(tabs.indexOf(destination)) }
+                                else -> scope.launch { pager.scrollToPage(tabs.indexOf(destination)) }
                             }
                         },
                         icon = {
@@ -346,7 +364,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = MaterialTheme.colorScheme.surface,
+                            indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                             selectedIconColor = MaterialTheme.colorScheme.onSurface,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -359,7 +377,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
             val openChat: (String) -> Unit = { if (pager.settledPage == page) onOpen("chat/${Uri.encode(it)}") }
             when (tabs[page]) {
                 MainDestination.Home -> NewHomeRoute(paddingValues = padding, onOpenConversation = openChat,
-                    onOpenStudio = { onOpen("create-character") }, onOpenChats = { scope.launch { pager.animateScrollToPage(tabs.indexOf(MainDestination.Chats)) } })
+                    onOpenStudio = { onOpen("create-character") }, onOpenChats = { scope.launch { pager.scrollToPage(tabs.indexOf(MainDestination.Chats)) } })
                 MainDestination.Discover -> HomeRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") }, onOpenConversation = openChat)
                 MainDestination.Chats -> ChatListRoute(paddingValues = padding, onOpenConversation = openChat, onOpenGroups = { onOpen("groups") })
                 MainDestination.Profile -> ProfileRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") },

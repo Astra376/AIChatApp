@@ -21,6 +21,7 @@ export interface Env {
   PLAY_ULTRA_PRODUCT_ID?: string;
   PLAY_ULTRA_BASE_PLANS?: string;
   BILLING_RETURN_URL?: string;
+  ULTRA_PREVIEW_ENABLED?: string;
   FAL_API_KEY: string;
   FAL_MODEL: string;
   FAL_ULTRA_MODEL?: string;

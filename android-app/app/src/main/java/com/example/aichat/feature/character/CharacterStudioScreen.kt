@@ -25,6 +25,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -84,7 +87,8 @@ enum class CharacterCreateStep {
     DETAILS,
     TAGLINE,
     DESCRIPTION,
-    DEFINITION
+    DEFINITION,
+    PSYCHOLOGY
 }
 
 data class CharacterStudioUiState(
@@ -95,7 +99,9 @@ data class CharacterStudioUiState(
     val isGeneratingPortraits: Boolean = false,
     val isGeneratingGreeting: Boolean = false,
     val isEnhancingPortrait: Boolean = false,
-    val selectedPreview: String? = null
+    val selectedPreview: String? = null,
+    val isAutoCreating: Boolean = false,
+    val isLoadingEditor: Boolean = false
 )
 
 @HiltViewModel
@@ -103,10 +109,14 @@ class CharacterStudioViewModel @Inject constructor(
     private val characterRepository: CharacterRepository,
     private val conversationRepository: ConversationRepository,
     private val draftStore: CharacterDraftStore,
-    authRepository: com.example.aichat.core.auth.AuthRepository
+    authRepository: com.example.aichat.core.auth.AuthRepository,
+    savedStateHandle: androidx.lifecycle.SavedStateHandle
 ) : ViewModel() {
     private val ownerId = authRepository.sessionState.value.profile?.userId.orEmpty()
-    private val restored = draftStore.read(ownerId)
+    private val editingId: String? = savedStateHandle["characterId"]
+    private var isEditing = editingId != null
+    private val draftKey = editingId?.let { "$ownerId:edit:$it" } ?: ownerId
+    private val restored = draftStore.read(draftKey)
     private val _uiState = MutableStateFlow(CharacterStudioUiState(
         draft = restored.draft, step = restored.step, portraitOptions = restored.portraitOptions,
         selectedPreview = restored.selectedPreview
@@ -117,17 +127,31 @@ class CharacterStudioViewModel @Inject constructor(
     val events = _events.asSharedFlow()
 
     init {
+        if (editingId != null && restored.draft.id != editingId) loadForEditing(editingId)
         viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             _uiState.collect { state ->
-                draftStore.save(ownerId, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
+                draftStore.save(draftKey, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
             }
         }
     }
 
     override fun onCleared() {
         val state = _uiState.value
-        draftStore.save(ownerId, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
+        draftStore.save(draftKey, SavedCharacterDraft(state.draft, state.step, state.portraitOptions, state.selectedPreview))
         super.onCleared()
+    }
+
+    fun loadForEditing(characterId: String) {
+        isEditing = true
+        if (_uiState.value.isLoadingEditor || _uiState.value.draft.id == characterId) return
+        _uiState.value = _uiState.value.copy(isLoadingEditor=true)
+        viewModelScope.launch {
+            try {
+                characterRepository.loadEditingDraft(characterId).onSuccess { draft ->
+                    _uiState.value = _uiState.value.copy(draft=draft,step=CharacterCreateStep.DETAILS)
+                }.onFailure { _events.emit(it.userFacingMessage("Couldn't load this character for editing.")) }
+            } finally { _uiState.value = _uiState.value.copy(isLoadingEditor=false) }
+        }
     }
 
     fun updateDraft(transform: (CharacterDraft) -> CharacterDraft) {
@@ -146,7 +170,8 @@ class CharacterStudioViewModel @Inject constructor(
             CharacterCreateStep.DETAILS -> _uiState.value.copy(step = CharacterCreateStep.VISIBILITY)
             CharacterCreateStep.TAGLINE,
             CharacterCreateStep.DESCRIPTION,
-            CharacterCreateStep.DEFINITION -> _uiState.value.copy(step = CharacterCreateStep.DETAILS)
+            CharacterCreateStep.DEFINITION,
+            CharacterCreateStep.PSYCHOLOGY -> _uiState.value.copy(step = CharacterCreateStep.DETAILS)
         }
     }
 
@@ -160,13 +185,33 @@ class CharacterStudioViewModel @Inject constructor(
             CharacterCreateStep.DETAILS -> CharacterCreateStep.DETAILS
             CharacterCreateStep.TAGLINE,
             CharacterCreateStep.DESCRIPTION,
-            CharacterCreateStep.DEFINITION -> CharacterCreateStep.DETAILS
+            CharacterCreateStep.DEFINITION,
+            CharacterCreateStep.PSYCHOLOGY -> CharacterCreateStep.DETAILS
         }
         _uiState.value = current.copy(step = nextStep)
     }
 
     fun openDetailsStep(step: CharacterCreateStep) {
         _uiState.value = _uiState.value.copy(step = step)
+    }
+
+    fun autoCreate() {
+        val state = _uiState.value
+        if (state.isAutoCreating || state.isGeneratingPortraits || state.isEnhancingPortrait) return
+        val idea = listOf(state.draft.name, state.draft.appearance, state.draft.characterDefinition).filter { it.isNotBlank() }.joinToString("\n")
+        if (idea.isBlank()) return
+        _uiState.value = state.copy(isAutoCreating = true)
+        viewModelScope.launch {
+            try {
+                characterRepository.autoCreate(idea).onSuccess { generated ->
+                    updateDraft { it.copy(name=generated.name,tagline=generated.tagline,appearance=generated.appearance,
+                        greeting=generated.greeting,bio=generated.bio,characterDefinition=generated.characterDefinition,
+                        psychologyDefaults=generated.psychologyDefaults) }
+                    _uiState.value = _uiState.value.copy(step = CharacterCreateStep.APPEARANCE)
+                    generatePortraits()
+                }.onFailure { _events.emit(it.userFacingMessage("Couldn't finish this character. Your draft is saved.")) }
+            } finally { _uiState.value = _uiState.value.copy(isAutoCreating = false) }
+        }
     }
 
     fun generatePortraits() {
@@ -244,18 +289,23 @@ class CharacterStudioViewModel @Inject constructor(
     }
 
     fun createCharacter(ownerUserId: String, onCreated: (String) -> Unit) {
-        if (_uiState.value.isSaving || _uiState.value.isEnhancingPortrait) return
+        if (_uiState.value.isSaving || _uiState.value.isEnhancingPortrait || _uiState.value.isLoadingEditor) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true)
             val draft = _uiState.value.draft
             val finalDraft = draft.copy(
-                systemPrompt = characterRepository.buildSystemPrompt(draft)
+                systemPrompt = if (draft.id != null && draft.characterDefinition == draft.systemPrompt) draft.systemPrompt else characterRepository.buildSystemPrompt(draft)
             )
             characterRepository.saveCharacter(finalDraft)
                 .onSuccess { characterId ->
                     _uiState.value = _uiState.value.copy(
                         draft = finalDraft.copy(id = characterId)
                     )
+                    if (isEditing) {
+                        _uiState.value = CharacterStudioUiState()
+                        onCreated(characterId)
+                        return@onSuccess
+                    }
                     conversationRepository.ensureConversation(ownerUserId, characterId)
                         .onSuccess { conversationId ->
                             _uiState.value = CharacterStudioUiState()
@@ -280,9 +330,11 @@ fun CharacterStudioRoute(
     ownerUserId: String = "",
     onBack: () -> Unit = {},
     onCreated: (String) -> Unit = {},
-    viewModel: CharacterStudioViewModel = hiltViewModel()
+    viewModel: CharacterStudioViewModel = hiltViewModel(),
+    characterId: String? = null
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(characterId) { characterId?.let(viewModel::loadForEditing) }
     val snackbarHostState = remember { SnackbarHostState() }
     var showVoices by rememberSaveable { mutableStateOf(false) }
     if (showVoices) VoicePickerDialog(onDismiss = { showVoices = false }, onSelected = { id ->
@@ -294,22 +346,43 @@ fun CharacterStudioRoute(
     }
 
     ScreenBackgroundBox(snackbarHostState = snackbarHostState) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            CharacterCreateHeader(
-                onBack = { viewModel.goBack(onBack) },
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .statusBarsPadding()
-                    .padding(
-                        start = AppChrome.screenHorizontalPadding,
-                        top = AppChrome.compactHeaderVerticalPadding
+        Scaffold(
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            topBar = {
+                CharacterCreateHeader(
+                    onBack = { viewModel.goBack(onBack) },
+                    editing = state.draft.id != null,
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(
+                        horizontal = AppChrome.screenHorizontalPadding,
+                        vertical = AppChrome.compactHeaderVerticalPadding
                     )
-            )
-
+                )
+            },
+            bottomBar = {
+                CharacterCreateBottomAction(
+                    state = state,
+                    onNext = {
+                        if (state.step == CharacterCreateStep.DETAILS) {
+                            viewModel.createCharacter(ownerUserId, onCreated)
+                        } else if (
+                            state.step == CharacterCreateStep.TAGLINE ||
+                            state.step == CharacterCreateStep.DESCRIPTION ||
+                            state.step == CharacterCreateStep.DEFINITION ||
+                            state.step == CharacterCreateStep.PSYCHOLOGY
+                        ) {
+                            viewModel.openDetailsStep(CharacterCreateStep.DETAILS)
+                        } else {
+                            viewModel.goNext()
+                        }
+                    },
+                    modifier = Modifier
+                        .imePadding()
+                        .navigationBarsPadding()
+                )
+            }
+        ) { innerPadding ->
             CharacterCreateStepContent(
                 state = state,
                 onNameChanged = { value -> viewModel.updateDraft { it.copy(name = value.take(CHARACTER_NAME_LIMIT)) } },
@@ -330,34 +403,15 @@ fun CharacterStudioRoute(
                 onSelectPortrait = viewModel::selectPortrait,
                 onUploadPortrait = viewModel::uploadPortrait,
                 onGenerateGreeting = viewModel::generateGreeting,
+                onAutoCreate = viewModel::autoCreate,
+                onPsychologyChanged = { value -> viewModel.updateDraft { it.copy(psychologyDefaults = value) } },
                 modifier = Modifier
                     .fillMaxSize()
+                    .padding(innerPadding)
                     .padding(
-                        start = AppChrome.screenHorizontalPadding,
-                        top = 104.dp,
-                        end = AppChrome.screenHorizontalPadding,
-                        bottom = 98.dp
+                        horizontal = AppChrome.screenHorizontalPadding,
+                        vertical = AppChrome.screenTopPadding
                     )
-            )
-
-            CharacterCreateBottomAction(
-                state = state,
-                onNext = {
-                    if (state.step == CharacterCreateStep.DETAILS) {
-                        viewModel.createCharacter(ownerUserId, onCreated)
-                    } else if (
-                        state.step == CharacterCreateStep.TAGLINE ||
-                        state.step == CharacterCreateStep.DESCRIPTION ||
-                        state.step == CharacterCreateStep.DEFINITION
-                    ) {
-                        viewModel.openDetailsStep(CharacterCreateStep.DETAILS)
-                    } else {
-                        viewModel.goNext()
-                    }
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .imePadding()
             )
         }
     }
@@ -366,6 +420,7 @@ fun CharacterStudioRoute(
 @Composable
 private fun CharacterCreateHeader(
     onBack: () -> Unit,
+    editing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -375,7 +430,7 @@ private fun CharacterCreateHeader(
         AppBackButton(onClick = onBack)
         Spacer(modifier = Modifier.width(AppChrome.compactControlGap))
         Text(
-            text = "Create character",
+            text = if (editing) "Edit character" else "Create character",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -399,12 +454,17 @@ private fun CharacterCreateStepContent(
     onSelectPortrait: (String) -> Unit,
     onUploadPortrait: (Uri) -> Unit,
     onGenerateGreeting: () -> Unit,
+    onAutoCreate: () -> Unit,
+    onPsychologyChanged: (com.example.aichat.core.network.CharacterPsychologyDefaultsDto) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (state.isLoadingEditor) { Box(modifier,contentAlignment=Alignment.Center) { CircularProgressIndicator() }; return }
     when (state.step) {
         CharacterCreateStep.NAME -> NameStep(
             name = state.draft.name,
             onNameChanged = onNameChanged,
+            idea = state.draft.appearance, onIdeaChanged = onAppearanceChanged,
+            isAutoCreating = state.isAutoCreating, onAutoCreate = onAutoCreate,
             modifier = modifier
         )
         CharacterCreateStep.APPEARANCE -> AppearanceStep(
@@ -437,6 +497,8 @@ private fun CharacterCreateStepContent(
             onAddDescription = { onOpenDetailsStep(CharacterCreateStep.DESCRIPTION) },
             onAddDefinition = { onOpenDetailsStep(CharacterCreateStep.DEFINITION) },
             onChooseVoice = onChooseVoice,
+            onPsychology = { onOpenDetailsStep(CharacterCreateStep.PSYCHOLOGY) },
+            onEditIdentity = { onOpenDetailsStep(CharacterCreateStep.NAME) },
             voiceSelected = state.draft.voiceId != null,
             modifier = modifier
         )
@@ -460,6 +522,11 @@ private fun CharacterCreateStepContent(
             maxLines = 9,
             modifier = modifier
         )
+        CharacterCreateStep.PSYCHOLOGY -> Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            StepTitle("Build a life")
+            Text("These are starting points. Memory, emotions and personality develop naturally through each story.", style=MaterialTheme.typography.bodyMedium)
+            CharacterPsychologyEditor(state.draft.psychologyDefaults, !state.isSaving, onPsychologyChanged)
+        }
         CharacterCreateStep.DEFINITION -> DefinitionStep(
             value = state.draft.characterDefinition,
             privateDefinition = state.draft.definitionPrivate,
@@ -474,6 +541,10 @@ private fun CharacterCreateStepContent(
 private fun NameStep(
     name: String,
     onNameChanged: (String) -> Unit,
+    idea: String,
+    onIdeaChanged: (String) -> Unit,
+    isAutoCreating: Boolean,
+    onAutoCreate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -496,8 +567,20 @@ private fun NameStep(
                 .fillMaxWidth()
                 .focusRequester(focusRequester),
             singleLine = true,
+            enabled = !isAutoCreating,
             shape = RoundedCornerShape(999.dp)
         )
+        AppTextField(value=idea,onValueChange=onIdeaChanged,placeholder="Or describe an idea. Let AI build their appearance, life and psychology.",
+            modifier=Modifier.fillMaxWidth(),minLines=3,maxLines=6,enabled=!isAutoCreating)
+        PrimaryButton(text=if(isAutoCreating) "Creating a personality…" else "Auto-create with AI",onClick=onAutoCreate,
+            enabled=!isAutoCreating && (idea.isNotBlank() || name.isNotBlank()),modifier=Modifier.fillMaxWidth(),
+            leadingIcon={AppIcon(AppIcons.sparkle,contentDescription=null)})
+        androidx.compose.animation.AnimatedVisibility(isAutoCreating) {
+            Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                androidx.compose.material3.LinearProgressIndicator(modifier=Modifier.fillMaxWidth())
+                Text("Imagining a life, a voice, relationships and the things that make them who they are…",style=MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -766,6 +849,8 @@ private fun OptionalDetailsStep(
     onAddDescription: () -> Unit,
     onAddDefinition: () -> Unit,
     onChooseVoice: () -> Unit,
+    onPsychology: () -> Unit,
+    onEditIdentity: () -> Unit,
     voiceSelected: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -774,6 +859,8 @@ private fun OptionalDetailsStep(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         StepTitle("Add details")
+        DetailOptionButton(title="Name, portrait & greeting",body="Refine their identity and first impression.",onClick=onEditIdentity)
+        DetailOptionButton(title="Psychology & life",body="Emotions, personality, memories, relationships and the user’s role.",onClick=onPsychology)
         DetailOptionButton(title = if (voiceSelected) "Change voice" else "Choose voice", body = "Official and community voices, or create your own.", onClick = onChooseVoice)
         DetailOptionButton(
             title = "Add Tagline",
@@ -950,8 +1037,9 @@ private fun CharacterCreateBottomAction(
         CharacterCreateStep.DETAILS -> !state.isSaving
         CharacterCreateStep.TAGLINE,
         CharacterCreateStep.DESCRIPTION,
-        CharacterCreateStep.DEFINITION -> true
-    } && !state.isGeneratingPortraits
+        CharacterCreateStep.DEFINITION,
+        CharacterCreateStep.PSYCHOLOGY -> true
+    } && !state.isGeneratingPortraits && !state.isAutoCreating && !state.isLoadingEditor
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -972,10 +1060,11 @@ private fun CharacterCreateBottomAction(
                 PrimaryButton(
                     text = when {
                         state.isSaving -> "Creating..."
-                        state.step == CharacterCreateStep.DETAILS -> "Create"
+                        state.step == CharacterCreateStep.DETAILS -> if (state.draft.id == null) "Create" else "Save character"
                         state.step == CharacterCreateStep.TAGLINE ||
                             state.step == CharacterCreateStep.DESCRIPTION ||
-                            state.step == CharacterCreateStep.DEFINITION -> "Done"
+                            state.step == CharacterCreateStep.DEFINITION ||
+                            state.step == CharacterCreateStep.PSYCHOLOGY -> "Done"
                         else -> "Next"
                     },
                     enabled = enabled,

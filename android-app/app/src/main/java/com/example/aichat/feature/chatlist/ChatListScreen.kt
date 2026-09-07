@@ -93,6 +93,7 @@ fun ChatListRoute(
     onOpenSearch: () -> Unit = {},
     onOpenActivity: () -> Unit = {},
     onOpenConversation: (String) -> Unit,
+    onOpenGroups: () -> Unit = {},
     viewModel: ChatListViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -104,6 +105,9 @@ fun ChatListRoute(
         contentPadding = screenContentPadding(paddingValues)
     ) {
 
+        item(key = "groups") {
+            androidx.compose.material3.TextButton(onClick = onOpenGroups, modifier = Modifier.fillMaxWidth()) { Text("Group chats") }
+        }
         if (state.isLoading && conversations.isEmpty()) {
             items(8) {
                 ChatListRowPlaceholder()

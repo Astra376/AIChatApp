@@ -15,9 +15,15 @@ export interface Env {
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   STRIPE_ULTRA_PRICE_ID?: string;
+  STRIPE_ULTRA_PRICE_CATALOG?: string;
+  PLAY_SERVICE_ACCOUNT_JSON?: string;
+  PLAY_PACKAGE_NAME?: string;
+  PLAY_ULTRA_PRODUCT_ID?: string;
+  PLAY_ULTRA_BASE_PLANS?: string;
   BILLING_RETURN_URL?: string;
   FAL_API_KEY: string;
   FAL_MODEL: string;
+  FAL_ULTRA_MODEL?: string;
   FAL_BACKGROUND_MODEL?: string;
   R2_PUBLIC_BASE_URL: string;
 }

@@ -226,6 +226,7 @@ class ChatBackgroundRepositoryTest {
     }
 
     private class FakeImageApi : ImageApi {
+        override suspend fun uploadPortrait(body: okhttp3.RequestBody): com.example.aichat.core.network.GeneratePortraitResponseDto = error("unused")
         val backgroundRequests = mutableListOf<GenerateChatBackgroundRequestDto>()
         var backgroundUrl = "https://assets.example/generated.jpg"
         var backgroundFailure: Throwable? = null

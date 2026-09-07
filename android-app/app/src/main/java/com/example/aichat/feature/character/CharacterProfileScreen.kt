@@ -152,7 +152,8 @@ fun CharacterProfileRoute(
     onOpenCreator: (String) -> Unit,
     onShare: ((CharacterSummary) -> Unit)? = null,
     onError: ((String) -> Unit)? = null,
-    viewModel: CharacterProfileViewModel = hiltViewModel()
+    viewModel: CharacterProfileViewModel = hiltViewModel(),
+    onEditCharacter: (String) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -177,7 +178,8 @@ fun CharacterProfileRoute(
             onChat = { viewModel.openChat(ownerUserId, onOpenConversation) },
             onOpenCreator = onOpenCreator,
             onToggleLike = viewModel::toggleLike,
-            onRetry = viewModel::refresh
+            onRetry = viewModel::refresh,
+            onEdit = state.character?.takeIf { it.ownerUserId == ownerUserId }?.let { character -> { onEditCharacter(character.id) } }
         )
     }
 }
@@ -190,7 +192,8 @@ internal fun CharacterProfileContent(
     onChat: (String) -> Unit,
     onOpenCreator: (String) -> Unit,
     onToggleLike: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onEdit: (() -> Unit)? = null
 ) {
     val character = state.character
     Column(
@@ -211,6 +214,7 @@ internal fun CharacterProfileContent(
         ) {
             AppBackButton(onClick = onBack)
             Spacer(modifier = Modifier.weight(1f))
+            if (onEdit != null) androidx.compose.material3.TextButton(onClick = onEdit) { Text("Edit") }
             IconButton(
                 enabled = character != null,
                 onClick = { character?.let(onShare) }

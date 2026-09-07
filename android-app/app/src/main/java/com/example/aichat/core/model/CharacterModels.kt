@@ -41,7 +41,8 @@ data class CharacterDraft(
     val definitionPrivate: Boolean = false,
     val visibility: CharacterVisibility = CharacterVisibility.PUBLIC,
     val avatarUrl: String? = null,
-    val voiceId: String? = null
+    val voiceId: String? = null,
+    val psychologyDefaults: com.example.aichat.core.network.CharacterPsychologyDefaultsDto = com.example.aichat.core.network.CharacterPsychologyDefaultsDto()
 )
 
 data class CursorPage<T>(

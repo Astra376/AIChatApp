@@ -1,5 +1,9 @@
 package com.example.aichat.feature.profile
 
+import com.example.aichat.feature.customization.AppearanceRepository
+import com.example.aichat.feature.customization.ShowcaseDto
+import com.example.aichat.feature.customization.AppearanceProfileHeader
+import com.example.aichat.feature.customization.ShowcaseWidgets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
@@ -36,6 +40,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.example.aichat.feature.activity.FollowStateDto
+import com.example.aichat.feature.activity.NotificationRepository
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.example.aichat.core.auth.AuthRepository
 import com.example.aichat.core.design.AppIcon
 import com.example.aichat.core.design.AppIcons
@@ -78,7 +85,9 @@ data class ProfileUiState(
     val liked: List<CharacterSummary> = emptyList(),
     val recent: List<CharacterSummary> = emptyList(),
     val interacted: List<CharacterSummary> = emptyList(),
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    val followerCount: Int? = null,
+    val followingCount: Int? = null
 )
 
 @HiltViewModel
@@ -86,18 +95,24 @@ class ProfileViewModel @Inject constructor(
     authRepository: AuthRepository,
     profileRepository: ProfileRepository,
     private val characterRepository: CharacterRepository,
-    private val conversationRepository: ConversationRepository
+    private val conversationRepository: ConversationRepository,
+    private val notificationRepository: NotificationRepository,
+    private val appearanceRepository: AppearanceRepository
 ) : ViewModel() {
     private val userId = authRepository.sessionState.value.profile?.userId.orEmpty()
     private val isLoading = MutableStateFlow(true)
+    private val followState = MutableStateFlow<FollowStateDto?>(null)
+    val showcase = MutableStateFlow<ShowcaseDto?>(null)
+    private var followRefresh: kotlinx.coroutines.Job? = null
 
     val uiState: StateFlow<ProfileUiState> = combine(
         profileRepository.profile,
         characterRepository.observeOwnedCharacters(userId),
         characterRepository.observeLikedCharacters(),
         conversationRepository.observeConversations(userId),
-        isLoading
-    ) { profile, owned, liked, conversations, loading ->
+        combine(isLoading, followState) { loading, social -> loading to social }
+    ) { profile, owned, liked, conversations, loadingState ->
+        val (loading, social) = loadingState
         // For Recent and Interacted, we need to map conversations back to CharacterSummary.
         // We'll use the ones we already have in owned/liked or fetch missing ones if possible.
         // For simplicity in this UI refactor, we'll build the list from available data.
@@ -135,7 +150,9 @@ class ProfileViewModel @Inject constructor(
             liked = liked,
             recent = recentChars,
             interacted = recentChars, // Temporary proxy until message count is implemented
-            isLoading = loading
+            isLoading = loading,
+            followerCount = social?.followerCount,
+            followingCount = social?.followingCount
         )
     }.stateIn(
         scope = viewModelScope,
@@ -156,6 +173,20 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    fun refreshFollowCounts() {
+        if (followRefresh?.isActive == true) return
+        followRefresh = viewModelScope.launch {
+            launch {
+                try { showcase.value = appearanceRepository.showcase(userId) } catch(error: Exception) { if(error is kotlinx.coroutines.CancellationException) throw error }
+            }
+            try {
+                followState.value = notificationRepository.followState(userId)
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+            }
+        }
+    }
+
     suspend fun ensureConversation(characterId: String): Result<String> {
         return conversationRepository.ensureConversation(userId, characterId)
     }
@@ -171,9 +202,12 @@ fun ProfileRoute(
     onOpenEditProfile: () -> Unit,
     onOpenSettings: () -> Unit,
     onUpgradeUltra: () -> Unit = {},
+    onOpenAppearance: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val showcase by viewModel.showcase.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val chatLauncher = rememberCharacterChatLauncher(
         ensureConversation = viewModel::ensureConversation,
@@ -181,6 +215,10 @@ fun ProfileRoute(
         snackbarHostState = snackbarHostState
     )
     var section by remember { mutableStateOf(ProfileSection.OWNED) }
+    LifecycleResumeEffect(viewModel) {
+        viewModel.refreshFollowCounts()
+        onPauseOrDispose { }
+    }
 
     ScreenBackgroundBox(snackbarHostState = snackbarHostState) {
         LazyVerticalGrid(
@@ -195,16 +233,20 @@ fun ProfileRoute(
                 if (state.isLoading) {
                     ProfileHeaderPlaceholder()
                 } else {
-                    ProfileHeader(
+                    AppearanceProfileHeader(
+                        appearance = showcase?.appearance ?: com.example.aichat.feature.customization.AppearanceDto(),
                         name = state.displayName,
                         avatarUrl = state.avatarUrl,
-                        stats = listOf(
-                            ProfileCountStat(state.owned.size, "characters"),
-                            ProfileCountStat(0, "followers"),
-                            ProfileCountStat(0, "following")
-                        )
+                        stats = buildList {
+                            add(ProfileCountStat(state.owned.size, "characters"))
+                            state.followerCount?.let { add(ProfileCountStat(it, "followers")) }
+                            state.followingCount?.let { add(ProfileCountStat(it, "following")) }
+                        }
                     )
                 }
+            }
+            showcase?.let { published ->
+                item(span = { GridItemSpan(maxLineSpan) }) { ShowcaseWidgets(published, onCharacter = { chatLauncher.open(it) }) }
             }
             state.bio?.takeIf { it.isNotBlank() }?.let { bio ->
                 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -228,13 +270,22 @@ fun ProfileRoute(
                     )
                     IconPillButton(
                         text = "Share Profile",
-                        onClick = { /* No functionality yet */ },
+                        onClick = {
+                            val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, "${state.displayName} on Meek\nmeek://profile/${state.userId}")
+                            }
+                            context.startActivity(android.content.Intent.createChooser(share, "Share profile"))
+                        },
                         modifier = Modifier.weight(1f)
                     )
                     IconCircleButton(onClick = onOpenSettings) {
                         AppIcon(AppIcons.settings, contentDescription = "Settings")
                     }
                 }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                IconPillButton(text = "Customize profile & appearance", onClick = onOpenAppearance, modifier = Modifier.fillMaxWidth())
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Surface(

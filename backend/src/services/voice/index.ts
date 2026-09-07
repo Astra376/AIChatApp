@@ -1,3 +1,4 @@
+import { hasUltra, requireUltra } from "../billing";
 import type { Env, RequestContext } from "../../env";
 import { AppError, assert } from "../../lib/errors";
 
@@ -13,7 +14,8 @@ export async function ensureVoiceSchema(env: Env): Promise<void> {
         embedding_key TEXT NOT NULL, preview_key TEXT, created_at INTEGER NOT NULL)`),
       env.DB.prepare("CREATE INDEX IF NOT EXISTS voices_owner ON voices(owner_user_id)"),
       env.DB.prepare("CREATE TABLE IF NOT EXISTS character_voices (character_id TEXT PRIMARY KEY, voice_id TEXT NOT NULL)"),
-      env.DB.prepare("CREATE TABLE IF NOT EXISTS voice_jobs (job_key TEXT PRIMARY KEY, user_id TEXT NOT NULL, started_at INTEGER NOT NULL)")
+      env.DB.prepare("CREATE TABLE IF NOT EXISTS voice_jobs (job_key TEXT PRIMARY KEY, user_id TEXT NOT NULL, started_at INTEGER NOT NULL)"),
+      env.DB.prepare("CREATE INDEX IF NOT EXISTS voice_jobs_user_started ON voice_jobs(user_id,started_at)")
     ]).then(() => undefined);
     schema.set(env.DB, pending);
     pending.catch(() => schema.delete(env.DB));
@@ -29,7 +31,7 @@ export async function listVoices(context: RequestContext) {
   await ensureVoiceSchema(context.env);
   const voices = await context.env.DB.prepare("SELECT * FROM voices WHERE owner_user_id = ? OR visibility = 'public' ORDER BY created_at DESC LIMIT 100")
     .bind(context.user!.userId).all<Voice>();
-  return { available: Boolean(context.env.FAL_API_KEY?.trim()), items: [
+  return { available: Boolean(context.env.FAL_API_KEY?.trim()), canCreate: await hasUltra(context.env, context.user!.userId), items: [
     ...OFFICIAL_VOICES.map(name => ({ id: `official:${name}`, name: name.replaceAll("_", " "), description: "Qwen3 official voice", official: true, mine: false, public: true })),
     ...voices.results.map(voice => dto(voice, context.user!.userId))
   ] };
@@ -125,6 +127,7 @@ async function acquireJob(context: RequestContext, key: string, limit: number) {
   assert(result.meta.changes === 1, 429, "VOICE_BUSY", "Voice is already being prepared or the hourly limit was reached.");
 }
 export async function createVoice(context: RequestContext, input: { name: string; description: string; sample?: File; public: boolean; requestKey: string }) {
+  await requireUltra(context.env, context.user!.userId, "Creating custom voices");
   await ensureVoiceSchema(context.env);
   assert(/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestKey), 400, "INVALID_REQUEST", "Invalid voice request.");
   const id = `custom_${context.user!.userId.replace(/[^a-zA-Z0-9_-]/g, "_")}_${input.requestKey}`;
@@ -172,6 +175,10 @@ export async function speakMessage(context: RequestContext, input: { conversatio
 }
 export async function previewVoice(context: RequestContext, voiceId: string) {
   await ensureVoiceSchema(context.env);
+  const voice = await voiceForUser(context, voiceId);
+  if (voice?.preview_key && await context.env.ASSETS.head(voice.preview_key)) {
+    return { audioUrl: await signedAsset(context, voice.preview_key) };
+  }
   return synthesize(context, voiceId, PREVIEW_TEXT);
 }
 async function synthesize(context: RequestContext, voiceId: string, text: string) {

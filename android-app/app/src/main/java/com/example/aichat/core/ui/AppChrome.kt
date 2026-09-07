@@ -93,6 +93,8 @@ fun Modifier.pageContentFrame(
     )
 }
 
+val LocalAppBackdrop = androidx.compose.runtime.staticCompositionLocalOf<@Composable () -> Unit> { {} }
+
 @Composable
 fun ScreenBackgroundBox(
     snackbarHostState: SnackbarHostState? = null,
@@ -110,6 +112,7 @@ fun ScreenBackgroundBox(
                     .fillMaxSize()
                     .background(background)
             )
+            LocalAppBackdrop.current()
             content()
             snackbarHostState?.let {
                 TopSnackbarHost(hostState = it)

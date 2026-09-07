@@ -89,10 +89,11 @@ export async function markNotificationRead(context: RequestContext, notification
 export async function getFollowState(context: RequestContext, userId: string) {
   await ensureNotificationSchema(context.env);
   const row = await context.env.DB.prepare(`SELECT COUNT(*) AS count,
-    COALESCE(MAX(CASE WHEN follower_user_id = ? THEN 1 ELSE 0 END), 0) AS following
-    FROM user_follows WHERE followed_user_id = ?`).bind(context.user!.userId, userId)
-    .first<{ count: number; following: number }>();
-  return { following: !!row?.following, followerCount: row?.count ?? 0 };
+    COALESCE(MAX(CASE WHEN follower_user_id = ? THEN 1 ELSE 0 END), 0) AS following,
+    (SELECT COUNT(*) FROM user_follows WHERE follower_user_id = ?) AS following_count
+    FROM user_follows WHERE followed_user_id = ?`).bind(context.user!.userId, userId, userId)
+    .first<{ count: number; following: number; following_count: number }>();
+  return { following: !!row?.following, followerCount: row?.count ?? 0, followingCount: row?.following_count ?? 0 };
 }
 export async function setFollow(context: RequestContext, userId: string, following: boolean) {
   await ensureNotificationSchema(context.env);

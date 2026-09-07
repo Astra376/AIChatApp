@@ -104,6 +104,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.navigation:navigation-compose:2.8.4")
+    implementation("com.android.billingclient:billing-ktx:9.1.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

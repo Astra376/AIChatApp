@@ -2,6 +2,9 @@ import type { Env } from "../../env";
 import { ensureNotificationSchema } from "../../db/ensureNotificationSchema";
 import { completeChatText } from "../../providers/openrouter";
 import { formatRoleplayMessage } from "./formatRoleplay";
+import { buildCharacterMemoryPrompt, composeCharacterSystemPrompt } from "./memory";
+import { resolveConversationPersonaPrompt } from "../personas";
+import { modelEnvironmentForUser } from "./modelPolicy";
 import { deliverNotificationEmails } from "../notifications/email";
 import { processRecommendations } from "../notifications";
 
@@ -79,9 +82,14 @@ async function processCandidate(env: Env, candidate: Candidate, now: number): Pr
     .bind(candidate.id, candidate.anchor_id, stage, now, now - 30 * MINUTE).run();
   if (!claimed.meta.changes) return;
   try {
-    const transcript = await latestOfflineTranscript(env, candidate.id);
-    const text = formatRoleplayMessage(await completeChatText(env, [
-      {role: "system", content: candidate.system_prompt + "\n\nThe user is away. Continue naturally in character with one short, relevant message based on the latest conversation. Do not pressure, guilt, claim an emergency, or mention a notification schedule. Ask at most one question. Keep it under 80 words. Do not repeat earlier follow-ups."},
+    const [transcript, memory, persona, modelEnv] = await Promise.all([
+      latestOfflineTranscript(env, candidate.id),
+      buildCharacterMemoryPrompt({env, user: {userId: candidate.owner_user_id}}, candidate.id),
+      resolveConversationPersonaPrompt(env, candidate.id, candidate.owner_user_id),
+      modelEnvironmentForUser(env, candidate.owner_user_id)
+    ]);
+    const text = formatRoleplayMessage(await completeChatText(modelEnv, [
+      {role: "system", content: composeCharacterSystemPrompt(candidate.system_prompt, [memory, persona].filter(Boolean).join("\n\n")) + "\n\nThe user is away. Continue naturally in character with one short, relevant message based on the latest conversation. Do not pressure, guilt, claim an emergency, or mention a notification schedule. Ask at most one question. Keep it under 80 words. Do not repeat earlier follow-ups."},
       ...transcript
     ], {maxTokens: 220, temperature: 0.85}));
     if (!text.trim()) throw new Error("Empty offline reply");

@@ -136,7 +136,8 @@ describe("social notifications",()=>{
     try{
       for(const follower of ["user","other","third","fourth"])await setFollow(context(follower),"creator",true);
       await setFollow(context("fourth"),"creator",true);
-      expect(await getFollowState(context("user"),"creator")).toEqual({following:true,followerCount:4});
+      expect(await getFollowState(context("user"),"creator")).toEqual({following:true,followerCount:4,followingCount:0});
+      expect(await getFollowState(context("user"),"user")).toEqual({following:false,followerCount:0,followingCount:1});
       const items=(await listNotifications(context("creator"),0,50)).items;
       expect(items).toHaveLength(3);expect(items.find(item=>item.title==="New followers")?.count).toBe(2);
       await setFollow(context("user"),"creator",false);expect((await getFollowState(context("user"),"creator")).following).toBe(false);

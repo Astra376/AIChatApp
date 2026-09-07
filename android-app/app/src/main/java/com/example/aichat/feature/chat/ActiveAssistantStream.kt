@@ -23,5 +23,7 @@ data class ActiveAssistantStream(
     val text: String = "",
     val accepted: Boolean = false,
     val status: ActiveStreamStatus = ActiveStreamStatus.STREAMING,
-    val remoteOnly: Boolean = false
+    val remoteOnly: Boolean = false,
+    val generationStatus: String = "Replying",
+    val modelLabel: String = "Meek Standard"
 )

@@ -38,7 +38,8 @@ class SettingsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val settingsRepository: SettingsRepository,
     private val notifications: NotificationRepository,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    private val groupRepository: com.example.aichat.feature.group.GroupRepository
 ) : ViewModel() {
     private val saving = MutableStateFlow(false)
     private val _events = MutableSharedFlow<String>()
@@ -58,7 +59,7 @@ class SettingsViewModel @Inject constructor(
             finally { saving.value = false }
         }
     }
-    fun signOut() { viewModelScope.launch { chatRepository.cancelAllOperations(); authRepository.signOut() } }
+    fun signOut() { viewModelScope.launch { chatRepository.cancelAllOperations(); groupRepository.cancelAllOperations(); authRepository.signOut() } }
 }
 
 @Composable
@@ -66,6 +67,8 @@ fun SettingsRoute(
     paddingValues: PaddingValues,
     onBack: () -> Unit,
     onOpenVoices: () -> Unit = {},
+    onOpenAppearance: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -86,6 +89,8 @@ fun SettingsRoute(
                     FilterChip(selected = state.themeMode == mode, onClick = { viewModel.setTheme(mode) }, label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) })
                 }
             } }
+            item { SecondaryButton("Customize appearance · Ultra", modifier = Modifier.fillMaxWidth(), onClick = onOpenAppearance) }
+            item { SecondaryButton("Personas", modifier = Modifier.fillMaxWidth(), onClick = onOpenPersonas) }
             item { SettingSwitch("Streaming vibration", "Light feedback as a reply arrives", state.streamingHaptics, onChanged = viewModel::setHaptics) }
             item { Text("Notifications", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
             item { SettingSwitch("Phone notifications", "Messages and activity on this phone", state.notifications.pushEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(pushEnabled = it)) } }

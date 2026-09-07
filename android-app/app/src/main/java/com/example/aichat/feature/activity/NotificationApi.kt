@@ -41,7 +41,7 @@ data class NotificationPageDto(val items: List<ActivityNotificationDto>, val nex
 data class PresenceRequestDto(val conversationId: String? = null)
 
 @Serializable
-data class FollowStateDto(val following: Boolean = false, val followerCount: Int = 0)
+data class FollowStateDto(val following: Boolean = false, val followerCount: Int = 0, val followingCount: Int = 0)
 
 interface NotificationApi {
     @GET("v1/notifications")

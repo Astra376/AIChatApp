@@ -67,7 +67,9 @@ jobs:
           target: google_apis
           disable-animations: true
           working-directory: android-app
-          script: bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
+          script: |
+            bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
+            adb pull /sdcard/Android/data/com.example.aichat/files/screenshots app/build/reports/screenshots
       - name: Keep test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -77,6 +79,7 @@ jobs:
             android-app/app/build/reports/tests/
             android-app/app/build/reports/androidTests/
             android-app/app/build/outputs/androidTest-results/
+            android-app/app/build/reports/screenshots/
       - name: Keep APK
         uses: actions/upload-artifact@v4
         with:

@@ -73,6 +73,7 @@ import javax.inject.Inject
 
 data class NewHomeUiState(
     val recentChats: List<ConversationSummary> = emptyList(),
+    val unreadChats: List<ConversationSummary> = emptyList(),
     val totalUnreadCount: Int = 0,
     val topPicks: List<CharacterSummary> = emptyList(),
     val recommendedFeed: List<CharacterSummary> = emptyList(),
@@ -91,11 +92,22 @@ internal fun mostRecentChatPerCharacter(
             compareBy<ConversationSummary> { it.updatedAt }
                 .thenBy { it.startedAt }
                 .thenBy { it.id }
-        )?.copy(
-            unreadCount = characterChats.sumOf { it.unreadCount },
-            hasUnreadBadge = characterChats.any { it.hasUnreadBadge }
         )
     }
+
+internal fun mostRecentUnreadChatPerCharacter(
+    chats: List<ConversationSummary>
+): List<ConversationSummary> = chats
+    .filter { it.unreadCount > 0 }
+    .groupBy(ConversationSummary::characterId)
+    .values
+    .mapNotNull { unreadSessions ->
+        mostRecentChatPerCharacter(unreadSessions).singleOrNull()?.copy(
+            unreadCount = unreadSessions.sumOf { it.unreadCount },
+            hasUnreadBadge = true
+        )
+    }
+    .sortedWith(compareByDescending<ConversationSummary> { it.unreadCount }.thenByDescending { it.updatedAt })
 
 @HiltViewModel
 class NewHomeViewModel @Inject constructor(
@@ -114,15 +126,11 @@ class NewHomeViewModel @Inject constructor(
         viewModelScope.launch {
             conversationRepository.observeConversations(userId).collect { chats ->
                 val latestChats = mostRecentChatPerCharacter(chats)
-                val unreadCount = latestChats.sumOf { it.unreadCount }
-                val sortedChats = latestChats.sortedWith(
-                    compareByDescending<ConversationSummary> { it.unreadCount }
-                        .thenByDescending { it.hasUnreadBadge }
-                        .thenByDescending { it.updatedAt }
-                )
+                val unreadChats = mostRecentUnreadChatPerCharacter(chats)
                 _uiState.value = _uiState.value.copy(
-                    recentChats = sortedChats,
-                    totalUnreadCount = unreadCount
+                    recentChats = latestChats.sortedByDescending { it.updatedAt },
+                    unreadChats = unreadChats,
+                    totalUnreadCount = unreadChats.sumOf { it.unreadCount }
                 )
             }
         }
@@ -236,7 +244,7 @@ fun NewHomeRoute(
                                 StoryNodePlaceholder()
                             }
                         }
-                        items(state.recentChats, key = { it.id }) { chat ->
+                        items(state.unreadChats, key = { it.id }) { chat ->
                             StoryNode(
                                 chat = chat,
                                 onClick = { onOpenConversation(chat.id) }

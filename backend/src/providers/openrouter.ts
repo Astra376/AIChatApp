@@ -12,6 +12,10 @@ interface CompletionOptions {
   temperature?: number;
 }
 
+export interface ChatGenerationOptions extends CompletionOptions {
+  reasoning?: { enabled: boolean; effort?: "low" | "high"; exclude?: boolean };
+}
+
 interface OpenRouterErrorPayload {
   error?: {
     code?: number | string;
@@ -258,7 +262,8 @@ async function* readCompletionStream(response: Response, deadline: RequestDeadli
 export async function* streamChatText(
   env: Env,
   messages: OpenRouterMessage[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: ChatGenerationOptions = {}
 ): AsyncGenerator<string, void, void> {
   let emittedAnyContent = false;
   const startedAt = Date.now();
@@ -266,15 +271,15 @@ export async function* streamChatText(
     for (let streamAttempt = 0; streamAttempt < MAX_ATTEMPTS; streamAttempt += 1) {
       const remainingMs = STREAM_TOTAL_MS - (Date.now() - startedAt);
       if (remainingMs <= 0) throw new DOMException("The provider stopped responding.", "TimeoutError");
-      const deadline = new RequestDeadline(STREAM_IDLE_MS, remainingMs, signal);
+      const deadline = new RequestDeadline(options.reasoning?.enabled ? 25_000 : STREAM_IDLE_MS, remainingMs, signal);
       try {
         const response = await requestOpenRouter(env, {
           ...modelSelection(env),
           messages,
-          max_tokens: 1000,
-          temperature: 0.8,
+          max_tokens: options.maxTokens ?? 1000,
+          temperature: options.temperature ?? 0.8,
           stream: true,
-          reasoning: { enabled: false },
+          reasoning: options.reasoning ?? { enabled: false },
           provider: chatProviderSelection(env)
         }, deadline.signal, deadline);
         for await (const chunk of readCompletionStream(response, deadline)) {

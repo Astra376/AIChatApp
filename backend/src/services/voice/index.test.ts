@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { speakMessage, speechText, characterVoiceStatement, OFFICIAL_VOICES } from "./index";
+import { speakMessage, speechText, characterVoiceStatement, OFFICIAL_VOICES, createVoice, previewVoice } from "./index";
 import type { RequestContext } from "../../env";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -32,4 +32,36 @@ describe("character voices", () => {
     await expect(characterVoiceStatement(ctx, "character", "private", "public")).rejects.toMatchObject({ code: "VOICE_PRIVATE" });
   });
   it("removes formatting and code from spoken text", () => expect(speechText('**Hello** *there*\n```secret code```')).toBe("Hello there"));
+});
+
+it("allows a community voice and scopes audio cache to the listening account", async () => {
+  const urls: string[] = [];
+  for (const userId of ["listener_a", "listener_b"]) {
+    const ctx = context(sql => sql.includes("FROM messages") ? { content: "Same text", character_id: "character" } : null, true);
+    ctx.user!.userId = userId;
+    urls.push((await speakMessage(ctx, { conversationId: "c", messageId: "m" })).audioUrl.split("?")[0]);
+  }
+  expect(urls[0]).not.toBe(urls[1]);
+  const ctx = context(() => ({ id: "community", owner_user_id: "someone_else", visibility: "public" }));
+  await expect(characterVoiceStatement(ctx, "character", "community", "public")).resolves.toBeDefined();
+});
+
+
+it("blocks custom voice creation for Standard accounts before uploads or paid inference", async () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch",fetch);
+  const ctx = context(() => null);
+  await expect(createVoice(ctx, {name:"My voice",description:"A warm thoughtful voice",public:false,requestKey:"request_1234567890"}))
+    .rejects.toMatchObject({code:"ULTRA_REQUIRED"});
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("reuses the existing designed preview for every eligible listener without another TTS charge", async () => {
+  const fetch=vi.fn(); vi.stubGlobal("fetch",fetch);
+  const ctx=context(() => ({id:"custom",visibility:"public",preview_key:"voice/custom/preview.mp3"}),true);
+  expect((await previewVoice(ctx,"custom")).audioUrl).toContain("voice%2Fcustom%2Fpreview.mp3");
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("does not expose another creator's private voice preview", async () => {
+  const fetch=vi.fn(); vi.stubGlobal("fetch",fetch);
+  await expect(previewVoice(context(()=>null,true),"private")).rejects.toMatchObject({code:"VOICE_NOT_FOUND"});
+  expect(fetch).not.toHaveBeenCalled();
 });

@@ -6,6 +6,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.hasText
@@ -34,6 +38,21 @@ import org.junit.Test
 class ChatScreenContentTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun chatChromeScreenshot() {
+        val state = ChatUiState(conversation = conversationDetail(listOf(
+            message(0, "How was your day?").copy(role = MessageRole.USER),
+            message(1, "*I settle into the chair, smiling.*\n\n\"Better now you're here. How about yours?\"")
+        )))
+        composeRule.setContent { TestChat(state) }
+        composeRule.waitForIdle()
+        val directory = requireNotNull(InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir("screenshots"))
+        directory.mkdirs()
+        java.io.File(directory, "chat-dark.png").outputStream().use {
+            composeRule.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+    }
 
     @Test
     fun smartFollow_stopsOnManualScroll_andResumesFromJumpToLatest() {
@@ -148,6 +167,19 @@ class ChatScreenContentTest {
         composeRule.onNodeWithText(textReceivedWhileAway).assertIsDisplayed()
     }
 
+    @Test
+    fun recoveredRemoteGeneration_canBeStoppedWithoutReplacingVisibleHistory() {
+        val state = ChatUiState(
+            conversation = conversationDetail(listOf(message(1, "Existing answer"))),
+            activeStream = stream("").copy(runId = "remote-run", remoteOnly = true)
+        )
+        var stops = 0
+        composeRule.setContent { TestChat(state, onStop = { stops++ }) }
+        composeRule.onNodeWithText("Existing answer").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Stop response").performClick()
+        composeRule.runOnIdle { assertEquals(1, stops) }
+    }
+
     private fun displayedTextStartingWith(prefix: String): String = composeRule
         .onAllNodes(hasText(prefix, substring = true), useUnmergedTree = true)
         .fetchSemanticsNodes()
@@ -158,14 +190,15 @@ class ChatScreenContentTest {
     @Composable
     private fun TestChat(
         state: ChatUiState,
-        onSelectVariant: (ChatMessage, Int) -> Unit = { _, _ -> }
+        onSelectVariant: (ChatMessage, Int) -> Unit = { _, _ -> },
+        onStop: () -> Unit = {}
     ) {
         val snackbarHostState = remember { SnackbarHostState() }
         AppTheme(themeMode = ThemeMode.LIGHT) {
             ChatScreenContent(
                 paddingValues = PaddingValues(), onBack = {}, onOpenMemory = {},
                 state = state.copy(streamingHaptics = false), snackbarHostState = snackbarHostState,
-                onComposerChanged = {}, onSend = {}, onContinue = {}, onLoadOlderMessages = {},
+                onComposerChanged = {}, onSend = {}, onContinue = {}, onStop = onStop, onLoadOlderMessages = {},
                 onMessageLongPress = {}, onSelectVariant = onSelectVariant,
                 onSelectPreviousVariant = {}, onSelectNextVariant = {}
             )

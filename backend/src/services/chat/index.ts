@@ -1,4 +1,4 @@
-import type { Env, RequestContext } from "../../env";
+import type { RequestContext } from "../../env";
 import { ensureConversationStreamingSchema } from "../../db/ensureConversationStreamingSchema";
 import { getCharacterById, incrementCharacterActivity } from "../../db/queries/characters";
 import {
@@ -20,7 +20,8 @@ import { createId } from "../../lib/ids";
 import { streamChatText } from "../../providers/openrouter";
 import { requireLatestAssistant } from "./rules";
 import { editMessageAtomically, rewindToMessageAtomically, selectRegenerationAtomically } from "../../db/queries/transcriptMutations";
-import { hasUltra } from "../billing";
+import { resolveChatModel, type ChatModelResolution } from "./modelPolicy";
+import { resolveConversationPersonaPrompt } from "../personas";
 import {
   buildCharacterMemoryPrompt,
   composeCharacterSystemPrompt,
@@ -211,11 +212,11 @@ async function buildAssistantContext(
   } = {}
 ) {
   const conversationId = conversation.id;
-  const [character, transcript, memoryPrompt, ultra] = await Promise.all([
+  const [character, transcript, memoryPrompt, personaPrompt] = await Promise.all([
     getCharacterById(context.env, context.user!.userId, conversation.character_id),
     loadTranscript(context, conversationId),
     buildCharacterMemoryPrompt(context, conversationId),
-    hasUltra(context.env, context.user!.userId)
+    resolveConversationPersonaPrompt(context.env, conversationId, context.user!.userId)
   ]);
   if (!character) {
     throw new AppError(404, "CHARACTER_NOT_FOUND", "Character not found.");
@@ -233,7 +234,10 @@ async function buildAssistantContext(
       content: options.appendedUserContent
     });
   }
-  const systemContent = composeCharacterSystemPrompt(character.system_prompt, memoryPrompt);
+  const latestUserContent = fullVisibleTranscript.filter(message => message.role === "user").at(-1)?.content ?? "";
+  const model = await resolveChatModel(context, conversationId, latestUserContent, conversation.version,
+    /thoughtful|reflective|analytical|philosoph|deliberate/i.test(character.system_prompt), options.appendedUserContent !== undefined);
+  const systemContent = composeCharacterSystemPrompt(character.system_prompt, [memoryPrompt, personaPrompt].filter(Boolean).join("\n\n"));
   const transcriptBudget = Math.max(
     MIN_RECENT_TRANSCRIPT_CHARACTERS,
     MAX_MODEL_INPUT_CHARACTERS - systemContent.length
@@ -244,14 +248,7 @@ async function buildAssistantContext(
     conversation,
     character,
     transcript,
-    modelEnv: ultra && context.env.OPENROUTER_ULTRA_MODEL ? {
-      ...context.env,
-      OPENROUTER_MODEL: context.env.OPENROUTER_ULTRA_MODEL,
-      OPENROUTER_FALLBACK_MODELS: "",
-      // Venice does not currently serve the verified Pro 0813 model. Use the
-      // Pro provider policy rather than inheriting a Flash-only restriction.
-      OPENROUTER_PROVIDERS: context.env.OPENROUTER_ULTRA_PROVIDERS ?? ""
-    } : context.env,
+    model,
     messages: [
       {
         role: "system" as const,
@@ -358,10 +355,10 @@ async function streamAssistantReply(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   onChunk: (chunk: string) => void,
   signal: AbortSignal,
-  modelEnv: Env
+  model: ChatModelResolution
 ): Promise<string> {
   let fullText = "";
-  for await (const chunk of streamChatText(modelEnv, messages, signal)) {
+  for await (const chunk of streamChatText(model.env, messages, signal, {reasoning: model.reasoning, maxTokens: model.maxTokens})) {
     fullText += chunk;
     onChunk(chunk);
   }
@@ -423,7 +420,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
   let leaseReleased = false;
 
   try {
-    const { character, transcript, messages, modelEnv } = await buildAssistantContext(context, conversation);
+    const { character, transcript, messages, model } = await buildAssistantContext(context, conversation);
     const continuationMessages = messagesForContinuation(messages, transcript.at(-1)?.role);
     const assistantMessageId = `message_${runId}`;
     const assistantPosition = (transcript.at(-1)?.position ?? -1) + 1;
@@ -442,6 +439,9 @@ export async function continueAssistantAndStream(context: RequestContext, conver
           assistantMessageId
         });
 
+        if (context.request.headers.get("X-Chat-Status") === "1") {
+          safeEnqueue(controller, {type: "status", runId, status: model.reasoningEnabled ? "Thinking" : "Replying", model: model.displayName});
+        }
         try {
           const finalText = await streamAssistantReply(
             continuationMessages,
@@ -454,7 +454,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
               });
             },
             abortController.signal,
-            modelEnv
+            model
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";
@@ -586,7 +586,7 @@ export async function sendMessageAndStream(
       throw new AppError(409, "DUPLICATE_MESSAGE_ID", "This message has already been sent.");
     }
 
-    const { character, transcript, messages, modelEnv } = await buildAssistantContext(context, conversation, {
+    const { character, transcript, messages, model } = await buildAssistantContext(context, conversation, {
       appendedUserContent: content
     });
     const assistantMessageId = `message_${runId}`;
@@ -631,6 +631,9 @@ export async function sendMessageAndStream(
           assistantMessageId
         });
 
+        if (context.request.headers.get("X-Chat-Status") === "1") {
+          safeEnqueue(controller, {type: "status", runId, status: model.reasoningEnabled ? "Thinking" : "Replying", model: model.displayName});
+        }
         try {
           const finalText = await streamAssistantReply(
             messages,
@@ -643,7 +646,7 @@ export async function sendMessageAndStream(
               });
             },
             abortController.signal,
-            modelEnv
+            model
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";
@@ -772,7 +775,7 @@ export async function regenerateLatestAssistantAndStream(
   let leaseReleased = false;
 
   try {
-    const { transcript, messages, modelEnv } = await buildAssistantContext(context, conversation, { untilPosition: message.position });
+    const { transcript, messages, model } = await buildAssistantContext(context, conversation, { untilPosition: message.position });
     let latest: TranscriptMessage;
     try {
       latest = requireLatestAssistant(transcript, messageId) as TranscriptMessage;
@@ -797,6 +800,9 @@ export async function regenerateLatestAssistantAndStream(
           assistantMessageId: latest.id
         });
 
+        if (context.request.headers.get("X-Chat-Status") === "1") {
+          safeEnqueue(controller, {type: "status", runId, status: model.reasoningEnabled ? "Thinking" : "Replying", model: model.displayName});
+        }
         try {
           const finalText = await streamAssistantReply(
             messages,
@@ -809,7 +815,7 @@ export async function regenerateLatestAssistantAndStream(
               });
             },
             abortController.signal,
-            modelEnv
+            model
           );
           throwIfAborted(abortController.signal);
           finalizationPhase = "full";

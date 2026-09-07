@@ -1,9 +1,10 @@
-import { generateCharacterPortrait, generateChatBackground } from "../services/images";
+import { generateCharacterPortrait, generateChatBackground, uploadCharacterPortrait } from "../services/images";
 import { json } from "../lib/response";
 import { optionalString, parseJson, requireString } from "../lib/validation";
 import type { RouteDefinition } from "./types";
 
 export const imageRoutes: RouteDefinition[] = [
+  { method: "POST", path: "/v1/images/upload-character-portrait", auth: true, handler: async context => json(await uploadCharacterPortrait(context)) },
   {
     method: "POST",
     path: "/v1/images/generate-character-portrait",

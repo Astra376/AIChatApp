@@ -10,6 +10,13 @@ import { conversationRoutes } from "./routes/conversations";
 import { notificationRoutes } from "./routes/notifications";
 import { voiceRoutes } from "./routes/voice";
 import { billingRoutes } from "./routes/billing";
+import { chatModelRoutes } from "./routes/chatModel";
+import { groupRoutes } from "./routes/groups";
+import { personaRoutes } from "./routes/personas";
+import { customizationRoutes } from "./routes/customization";
+import { characterPsychologyRoutes } from "./routes/characterPsychology";
+import { processGroupFollowups } from "./services/groups";
+import { resumeEmotionPortraits } from "./services/characterPsychology";
 import { homeRoutes } from "./routes/home";
 import { imageRoutes } from "./routes/images";
 import { profileRoutes } from "./routes/profile";
@@ -20,6 +27,11 @@ const routes: RouteDefinition[] = [
   ...notificationRoutes,
   ...voiceRoutes,
   ...billingRoutes,
+  ...chatModelRoutes,
+  ...groupRoutes,
+  ...personaRoutes,
+  ...customizationRoutes,
+  ...characterPsychologyRoutes,
   ...authRoutes,
   ...profileRoutes,
   ...characterRoutes,
@@ -71,7 +83,7 @@ export default {
           headers: {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization,Content-Type"
+            "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Chat-Status"
           }
         });
       }
@@ -109,5 +121,7 @@ export default {
   },
   async scheduled(event: object, env: Env, ctx: { waitUntil(promise: Promise<any>): void }) {
     ctx.waitUntil(processOfflineMessages(env));
+    ctx.waitUntil(processGroupFollowups(env));
+    ctx.waitUntil(resumeEmotionPortraits(env));
   }
 };

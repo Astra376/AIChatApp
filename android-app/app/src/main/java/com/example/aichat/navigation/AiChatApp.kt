@@ -9,6 +9,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -39,6 +44,10 @@ import com.example.aichat.feature.profile.*
 import com.example.aichat.feature.signin.SignInRoute
 import com.example.aichat.feature.ultra.UltraRoute
 import com.example.aichat.feature.voice.VoiceLibraryRoute
+import com.example.aichat.feature.group.*
+import com.example.aichat.feature.persona.PersonaLibraryRoute
+import com.example.aichat.feature.customization.AppearanceRoute
+import com.example.aichat.feature.customization.AppearanceBackdrop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -103,18 +112,26 @@ private val bottomDestinations = listOf(
 fun AiChatApp(appViewModel: AppViewModel, notificationUri: Uri? = null, onNotificationConsumed: () -> Unit = {}) {
     val session by appViewModel.sessionState.collectAsStateWithLifecycle()
     val profile by appViewModel.profile.collectAsStateWithLifecycle()
+    val appearance by appViewModel.appearance.preferences.collectAsStateWithLifecycle()
     val activeProfile = profile ?: session.profile
     val context = LocalContext.current
     LaunchedEffect(session.isSignedIn, session.isLoading) {
         if (session.isLoading) return@LaunchedEffect
-        if (session.isSignedIn) com.example.aichat.feature.activity.NotificationWorker.schedule(context)
-        else com.example.aichat.feature.activity.NotificationWorker.cancel(context)
+        if (session.isSignedIn) {
+            com.example.aichat.feature.activity.NotificationWorker.schedule(context)
+            runCatching { appViewModel.appearance.refresh() }
+        } else {
+            com.example.aichat.feature.activity.NotificationWorker.cancel(context)
+            appViewModel.appearance.reset()
+        }
     }
     when {
         session.isLoading -> LoadingScreen()
         !session.isSignedIn -> SignInRoute()
         else -> key(activeProfile?.userId) {
-            MainShell(activeProfile?.userId.orEmpty(), activeProfile?.displayName.orEmpty(), activeProfile?.avatarUrl, appViewModel, notificationUri, onNotificationConsumed)
+            CompositionLocalProvider(LocalAppBackdrop provides { AppearanceBackdrop(appearance, Modifier.fillMaxSize()) }) {
+                MainShell(activeProfile?.userId.orEmpty(), activeProfile?.displayName.orEmpty(), activeProfile?.avatarUrl, appViewModel, notificationUri, onNotificationConsumed)
+            }
         }
     }
 }
@@ -162,6 +179,7 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
             val id = uri.pathSegments.singleOrNull()
             val route = if (uri.scheme == "meek") when (uri.host) {
                 "chat" -> id?.let { "chat/${Uri.encode(it)}" }
+                "group" -> id?.let { "groups/${Uri.encode(it)}" }
                 "character" -> id?.let { "character-profile/${Uri.encode(it)}" }
                 "profile" -> id?.let { "creator-profile/${Uri.encode(it)}" }
                 "activity" -> "activity"
@@ -186,6 +204,11 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
                 }
             )
         }
+        composable("edit-character/{characterId}") { entry ->
+            CharacterStudioRoute(paddingValues = PaddingValues(), ownerUserId = ownerUserId,
+                characterId = entry.arguments?.getString("characterId"), onBack = { nav.backFrom(entry) },
+                onCreated = { nav.backFrom(entry) })
+        }
         composable("chat/{conversationId}") { entry ->
             ChatRoute(
                 paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) },
@@ -197,7 +220,8 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
                 },
                 onOpenCharacterProfile = { nav.openFrom(entry, "character-profile/${Uri.encode(it)}") },
                 onOpenCreatorProfile = { nav.openFrom(entry, "creator-profile/${Uri.encode(it)}") },
-                onUpgradeUltra = { nav.openFrom(entry, "ultra") }
+                onUpgradeUltra = { nav.openFrom(entry, "ultra") },
+                onOpenPersonas = { nav.openFrom(entry, "chat/${Uri.encode(entry.arguments?.getString("conversationId"))}/personas") }
             )
         }
         composable("character-profile/{characterId}") { entry ->
@@ -208,7 +232,8 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
                         nav.navigate("chat/${Uri.encode(id)}") { popUpTo("main_tabs"); launchSingleTop = true }
                     }
                 },
-                onOpenCreator = { nav.openFrom(entry, "creator-profile/${Uri.encode(it)}") }
+                onOpenCreator = { nav.openFrom(entry, "creator-profile/${Uri.encode(it)}") },
+                onEditCharacter = { nav.openFrom(entry, "edit-character/${Uri.encode(it)}") }
             )
         }
         composable("creator-profile/{userId}") { entry ->
@@ -224,27 +249,47 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
             SearchRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenConversation = { nav.openFrom(entry, "chat/${Uri.encode(it)}") })
         }
         composable("settings") { entry ->
-            SettingsRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenVoices = { nav.openFrom(entry, "voices") })
+            SettingsRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenVoices = { nav.openFrom(entry, "voices") },
+                onOpenAppearance = { nav.openFrom(entry, "appearance") }, onOpenPersonas = { nav.openFrom(entry, "personas") })
         }
         composable("activity") { entry ->
             ActivityRoute(
                 paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) },
                 onOpenConversation = { id, _ -> nav.openFrom(entry, "chat/${Uri.encode(id)}") },
                 onOpenCharacter = { nav.openFrom(entry, "character-profile/${Uri.encode(it)}") },
-                onOpenProfile = { nav.openFrom(entry, "creator-profile/${Uri.encode(it)}") }
+                onOpenProfile = { nav.openFrom(entry, "creator-profile/${Uri.encode(it)}") },
+                onOpenGroup = { nav.openFrom(entry, "groups/${Uri.encode(it)}") }
             )
         }
         composable("ultra") { entry -> UltraRoute(onBack = { nav.backFrom(entry) }) }
-        composable("voices") { entry -> VoiceLibraryRoute(onBack = { nav.backFrom(entry) }) }
+        composable("voices") { entry -> VoiceLibraryRoute(onBack = { nav.backFrom(entry) }, onUpgradeUltra = { nav.openFrom(entry, "ultra") }) }
+        composable("voices/create") { entry -> VoiceLibraryRoute(onBack = { nav.backFrom(entry) }, startCreating = true, onUpgradeUltra = { nav.openFrom(entry, "ultra") }) }
+        composable("personas") { entry -> PersonaLibraryRoute(onBack = { nav.backFrom(entry) }) }
+        composable("personas/create") { entry -> PersonaLibraryRoute(onBack = { nav.backFrom(entry) }, startCreating = true) }
+        composable("chat/{conversationId}/personas") { entry ->
+            PersonaLibraryRoute(onBack = { nav.backFrom(entry) }, conversationId = entry.arguments?.getString("conversationId"), onSelect = { nav.backFrom(entry) })
+        }
+        composable("appearance") { entry -> AppearanceRoute(onBack = { nav.backFrom(entry) }, onUpgradeUltra = { nav.openFrom(entry, "ultra") }) }
+        composable("groups") { entry ->
+            GroupListRoute(PaddingValues(), onBack = { nav.backFrom(entry) }, onCreate = { nav.openFrom(entry, "groups/create") }, onOpenGroup = { nav.openFrom(entry, "groups/${Uri.encode(it)}") })
+        }
+        composable("groups/create") { entry ->
+            CreateGroupRoute(PaddingValues(), onBack = { nav.backFrom(entry) }, onCreated = { id ->
+                if (nav.currentBackStackEntry?.id == entry.id) nav.navigate("groups/${Uri.encode(id)}") { popUpTo("groups/create") { inclusive = true }; launchSingleTop = true }
+            })
+        }
+        composable("groups/{groupId}") { entry -> GroupChatRoute(PaddingValues(), onBack = { nav.backFrom(entry) }) }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (String) -> Unit) {
     val tabs = remember { bottomDestinations.filter { it != MainDestination.Studio && it != MainDestination.Ultra } }
     val pager = rememberPagerState { tabs.size }
     val scope = rememberCoroutineScope()
     val current = tabs[pager.targetPage]
+    var showCreate by rememberSaveable { mutableStateOf(false) }
     val chatListViewModel: com.example.aichat.feature.chatlist.ChatListViewModel = hiltViewModel()
     val chats by chatListViewModel.uiState.collectAsStateWithLifecycle()
     val unread = chats.conversations.sumOf { it.unreadCount }
@@ -277,7 +322,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                         selected = selected, alwaysShowLabel = false,
                         onClick = {
                             when (destination) {
-                                MainDestination.Studio -> onOpen("create-character")
+                                MainDestination.Studio -> { showCreate = true }
                                 MainDestination.Ultra -> onOpen("ultra")
                                 else -> scope.launch { pager.animateScrollToPage(tabs.indexOf(destination)) }
                             }
@@ -307,12 +352,42 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                 MainDestination.Home -> NewHomeRoute(paddingValues = padding, onOpenConversation = openChat,
                     onOpenStudio = { onOpen("create-character") }, onOpenChats = { scope.launch { pager.animateScrollToPage(tabs.indexOf(MainDestination.Chats)) } })
                 MainDestination.Discover -> HomeRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") }, onOpenConversation = openChat)
-                MainDestination.Chats -> ChatListRoute(paddingValues = padding, onOpenConversation = openChat)
+                MainDestination.Chats -> ChatListRoute(paddingValues = padding, onOpenConversation = openChat, onOpenGroups = { onOpen("groups") })
                 MainDestination.Profile -> ProfileRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") },
                     onOpenConversation = openChat, onOpenEditProfile = { onOpen("edit-profile") },
-                    onOpenSettings = { onOpen("settings") }, onUpgradeUltra = { onOpen("ultra") })
+                    onOpenSettings = { onOpen("settings") }, onUpgradeUltra = { onOpen("ultra") }, onOpenAppearance = { onOpen("appearance") })
                 else -> Unit
             }
+        }
+    }
+    if (showCreate) CreateSheet(onDismiss = { showCreate = false }, onOpen = { route -> showCreate = false; onOpen(route) })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CreateSheet(onDismiss: () -> Unit, onOpen: (String) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Create", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp))
+            data class Choice(val title: String, val detail: String, val route: String, val icon: AppIconGlyph, val ultra: Boolean = false)
+            listOf(
+                Choice("Character", "Bring someone new to life", "create-character", AppIcons.create),
+                Choice("Persona", "Choose who you are in your chats", "personas/create", AppIcons.profile),
+                Choice("Group chat", "Bring your characters together", "groups/create", AppIcons.chats),
+                Choice("Custom voice", "Design a voice or add a sample", "voices/create", AppIcons.sparkle, true)
+            ).forEach { choice ->
+                Surface(onClick = { onOpen(choice.route) }, shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface) {
+                    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AppIcon(choice.icon, contentDescription = null, size = 24.dp)
+                        Column(Modifier.weight(1f)) {
+                            Text(choice.title, style = MaterialTheme.typography.titleMedium)
+                            Text(choice.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (choice.ultra) AssistChip(onClick = { onOpen(choice.route) }, label = { Text("Ultra") }, leadingIcon = { AppIcon(AppIcons.sparkle, null, size = 14.dp) })
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

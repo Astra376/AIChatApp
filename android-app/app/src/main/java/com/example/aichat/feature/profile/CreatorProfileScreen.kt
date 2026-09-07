@@ -1,5 +1,9 @@
 package com.example.aichat.feature.profile
 
+import com.example.aichat.feature.customization.AppearanceRepository
+import com.example.aichat.feature.customization.ShowcaseDto
+import com.example.aichat.feature.customization.AppearanceProfileHeader
+import com.example.aichat.feature.customization.ShowcaseWidgets
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,6 +61,7 @@ import kotlinx.coroutines.launch
 
 data class CreatorProfileUiState(
     val profile: PublicProfile? = null,
+    val showcase: ShowcaseDto? = null,
     val characters: List<CharacterSummary> = emptyList(),
     val nextCursor: String? = null,
     val isLoading: Boolean = true,
@@ -64,6 +69,7 @@ data class CreatorProfileUiState(
     val isOwnProfile: Boolean = false,
     val following: Boolean = false,
     val followerCount: Int? = null,
+    val followingCount: Int? = null,
     val isFollowLoading: Boolean = true,
     val isChangingFollow: Boolean = false
 )
@@ -73,6 +79,7 @@ class CreatorProfileViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: CreatorProfileRepository,
     private val notificationRepository: NotificationRepository,
+    private val appearanceRepository: AppearanceRepository,
     authRepository: AuthRepository
 ) : ViewModel() {
     private val userId: String = checkNotNull(savedStateHandle["userId"])
@@ -92,9 +99,13 @@ class CreatorProfileViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isLoading = true, isFollowLoading = true)
         refreshJob = viewModelScope.launch {
             launch {
+                try { _uiState.value = _uiState.value.copy(showcase = appearanceRepository.showcase(userId)) }
+                catch(error: Exception) { if(error is CancellationException) throw error }
+            }
+            launch {
                 try {
                     val follow = notificationRepository.followState(userId)
-                    _uiState.value = _uiState.value.copy(following = follow.following, followerCount = follow.followerCount)
+                    _uiState.value = _uiState.value.copy(following = follow.following, followerCount = follow.followerCount, followingCount = follow.followingCount)
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
                 } finally {
@@ -131,7 +142,7 @@ class CreatorProfileViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val result = notificationRepository.setFollow(userId, following)
-                _uiState.value = _uiState.value.copy(following = result.following, followerCount = result.followerCount)
+                _uiState.value = _uiState.value.copy(following = result.following, followerCount = result.followerCount, followingCount = result.followingCount)
             } catch (error: Exception) {
                 _uiState.value = _uiState.value.copy(following = previous.following, followerCount = previous.followerCount)
                 if (error is CancellationException) throw error
@@ -238,7 +249,8 @@ internal fun CreatorProfileContent(
         item(span = { GridItemSpan(maxLineSpan) }) {
             val profile = state.profile
             if (profile != null) {
-                ProfileHeader(
+                AppearanceProfileHeader(
+                    appearance = state.showcase?.appearance ?: com.example.aichat.feature.customization.AppearanceDto(),
                     name = profile.displayName,
                     avatarUrl = profile.avatarUrl,
                     stats = listOf(
@@ -269,6 +281,9 @@ internal fun CreatorProfileContent(
             }
         }
 
+        state.showcase?.let { published ->
+            item(span = { GridItemSpan(maxLineSpan) }) { ShowcaseWidgets(published, onCharacter = onOpenCharacter) }
+        }
         if (state.profile != null) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(
@@ -277,7 +292,10 @@ internal fun CreatorProfileContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = state.followerCount?.let { if (it == 1) "1 follower" else "$it followers" } ?: "Followers",
+                        text = state.followerCount?.let {
+                            val followers = if (it == 1) "1 follower" else "$it followers"
+                            "$followers · ${state.followingCount ?: 0} following"
+                        } ?: "Followers",
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

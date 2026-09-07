@@ -20,7 +20,7 @@ import retrofit2.Retrofit
 import retrofit2.http.*
 
 @Serializable data class VoiceDto(val id: String, val name: String, val description: String = "", val official: Boolean = false, val mine: Boolean = false, val public: Boolean = false)
-@Serializable data class VoiceListDto(val available: Boolean = false, val items: List<VoiceDto> = emptyList())
+@Serializable data class VoiceListDto(val available: Boolean = false, val canCreate: Boolean = false, val items: List<VoiceDto> = emptyList())
 @Serializable data class AudioDto(val audioUrl: String)
 @Serializable data class SpeakDto(val conversationId: String, val messageId: String)
 @Serializable data class VoiceChoiceDto(val voiceId: String)

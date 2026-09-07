@@ -36,5 +36,17 @@ export async function getTrendingSearches(context: RequestContext) {
     FROM search_interest WHERE day >= ? GROUP BY query
     ORDER BY popularity DESC, MAX(day) DESC, query ASC LIMIT 10`).bind(day - 7)
     .all<{ query: string }>();
-  return { queries: (rows.results ?? []).map(row => row.query) };
+  const queries = (rows.results ?? []).map(row => row.query);
+  // Cold starts use real public character activity, never invented search counts.
+  if (queries.length < 10) {
+    const popular = await context.env.DB.prepare(`SELECT name FROM characters WHERE visibility = 'public'
+      ORDER BY public_chat_count DESC, last_active_at DESC LIMIT 20`).all<{ name: string }>();
+    const seen = new Set(queries.map(normalizeSearchQuery));
+    for (const row of popular.results ?? []) {
+      const key = normalizeSearchQuery(row.name);
+      if (!seen.has(key)) { queries.push(row.name); seen.add(key); }
+      if (queries.length >= 10) break;
+    }
+  }
+  return { queries };
 }

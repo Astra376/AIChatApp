@@ -197,6 +197,11 @@ class CharacterRepositoryLikeTest {
 }
 
 private class ControllableCharacterApi : CharacterApi {
+    override suspend fun autoCreate(body: com.example.aichat.core.network.AutoCreateCharacterRequestDto): com.example.aichat.core.network.AutoCreateCharacterDto = error("unused")
+    override suspend fun psychology(characterId: String): com.example.aichat.core.network.CharacterPsychologyDefaultsDto = error("unused")
+    override suspend fun emotionPortraits(characterId: String): com.example.aichat.core.network.EmotionPortraitsDto = error("unused")
+    override suspend fun generateEmotionPortraits(characterId: String): com.example.aichat.core.network.EmotionPortraitsDto = error("unused")
+
     val likeStarted = Channel<Unit>(Channel.UNLIMITED)
     val unlikeStarted = Channel<Unit>(Channel.UNLIMITED)
     val getStarted = Channel<Unit>(Channel.UNLIMITED)
@@ -239,6 +244,7 @@ private class ControllableCharacterApi : CharacterApi {
 }
 
 private object UnusedImageApi : ImageApi {
+        override suspend fun uploadPortrait(body: okhttp3.RequestBody): com.example.aichat.core.network.GeneratePortraitResponseDto = error("unused")
     override suspend fun generatePortrait(
         body: GeneratePortraitRequestDto
     ): GeneratePortraitResponseDto = unused()

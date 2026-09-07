@@ -408,3 +408,34 @@ async function generateImageWithFal(
     deadline.dispose();
   }
 }
+
+/** Persist these references so long image jobs survive a Worker's background lifetime. */
+export interface QueuedPortraitJob { statusUrl: string; resultUrl: string; model: string; requestId: string }
+export async function queuePortraitWithFal(env: Env, prompt: string, referenceImageUrl: string): Promise<QueuedPortraitJob> {
+  const configuration = requireFalConfiguration(env, `${env.FAL_MODEL.replace(/\/edit$/, "")}/edit`);
+  const response = await fetch(`${FAL_QUEUE_ORIGIN}/${configuration.model}`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Key ${configuration.apiKey}` },
+    body: JSON.stringify({ prompt, aspect_ratio: "1:1", output_format: "jpeg", num_images: 1, resolution: "1K", image_urls: [referenceImageUrl] }),
+    signal: AbortSignal.timeout(12_000)
+  });
+  if (!response.ok) throw new AppError(502, "FAL_QUEUE_ERROR", "Expression generation couldn't be queued.");
+  const data = await response.json() as FalQueueResponse;
+  if (!data.request_id || data.request_id.length > 200) throw new AppError(502, "FAL_QUEUE_ERROR", "Expression generation returned an invalid request.");
+  return { requestId: data.request_id, model: configuration.model,
+    statusUrl: validatedFalRequestUrl(data.status_url,canonicalFalRequestUrl(configuration.model,data.request_id,"status"),"status","FAL_QUEUE_ERROR"),
+    resultUrl: validatedFalRequestUrl(data.response_url,canonicalFalRequestUrl(configuration.model,data.request_id,"result"),"result","FAL_QUEUE_ERROR") };
+}
+export async function pollPortraitWithFal(env: Env, job: QueuedPortraitJob): Promise<string | null> {
+  const configuration = requireFalConfiguration(env, job.model);
+  const statusUrl = validatedFalRequestUrl(job.statusUrl, canonicalFalRequestUrl(job.model,job.requestId,"status"),"status","FAL_STATUS_ERROR");
+  const response = await fetch(statusUrl, { headers: { Authorization: `Key ${configuration.apiKey}` }, signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new AppError(502,"FAL_STATUS_ERROR","Expression generation status is temporarily unavailable.");
+  const data = await response.json() as FalStatusResponse;
+  if (data.status === "FAILED" || data.error != null) throw new AppError(502,"FAL_FAILED","Expression generation failed.");
+  if (data.status !== "COMPLETED") return null;
+  const resultUrl = validatedFalRequestUrl(data.response_url || job.resultUrl,canonicalFalRequestUrl(job.model,job.requestId,"result"),"result","FAL_STATUS_ERROR");
+  const result = await fetch(resultUrl, { headers: { Authorization: `Key ${configuration.apiKey}` }, signal: AbortSignal.timeout(8_000) });
+  if (!result.ok) throw new AppError(502,"FAL_RESULT_ERROR","Expression generation result is temporarily unavailable.");
+  const image = await result.json() as FalResultResponse;
+  return requireGeneratedImageUrl(image.images?.[0]?.url);
+}

@@ -95,7 +95,9 @@ data class CharacterWriteRequestDto(
     val definitionPrivate: Boolean,
     val visibility: String,
     val avatarUrl: String? = null,
-    val voiceId: String? = null
+    val voiceId: String? = null,
+    val psychologyDefaults: CharacterPsychologyDefaultsDto? = null,
+    val defaultPersona: CharacterDefaultPersonaDto? = null
 )
 
 @Serializable
@@ -150,13 +152,24 @@ data class CharacterMemoryDto(
     val conversationId: String,
     val shortTerm: String,
     val longTerm: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val midTerm: String = "",
+    val limits: MemoryLimitsDto = MemoryLimitsDto(),
+    val tier: String = "standard",
+    val scene: MemorySceneDto = MemorySceneDto(),
+    val emotion: CharacterEmotionDto? = null,
+    val personality: CharacterPersonalityDto? = null,
+    val psychology: CharacterPsychologyDto? = null
 )
 
 @Serializable
 data class UpdateCharacterMemoryRequestDto(
     val shortTerm: String,
-    val longTerm: String
+    val longTerm: String,
+    val midTerm: String? = null,
+    val emotion: CharacterEmotionDto? = null,
+    val personality: CharacterPersonalityDto? = null,
+    val psychology: CharacterPsychologyDto? = null
 )
 
 @Serializable
@@ -218,6 +231,8 @@ data class GenerateChatBackgroundResponseDto(
 @Serializable
 data class StreamEventDto(
     val type: String,
+    val status: String? = null,
+    val model: String? = null,
     val runId: String? = null,
     val conversationVersion: Long? = null,
     val userMessage: MessageDto? = null,

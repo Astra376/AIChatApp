@@ -16,6 +16,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 sealed interface ChatStreamEvent {
+    data class Status(val runId: String, val status: String, val model: String) : ChatStreamEvent
+
     data class AcceptedSend(
         val runId: String,
         val conversationVersion: Long,
@@ -131,6 +133,7 @@ class WorkerStreamingClient private constructor(
     private fun stream(request: Request, expectedStream: ExpectedStream): Flow<ChatStreamEvent> = callbackFlow {
         val call = streamingHttpClient.newCall(request.newBuilder()
             .header("Accept", "text/event-stream")
+            .header("X-Chat-Status", "1")
             .header("Cache-Control", "no-cache")
             .build())
         val readerJob = launch(Dispatchers.IO) {
@@ -226,6 +229,12 @@ class WorkerStreamingClient private constructor(
                 event.runId
             }
 
+            is ChatStreamEvent.Status -> {
+                checkNotNull(acceptedRunId) { "The chat stream sent status before it was accepted." }
+                check(event.runId == acceptedRunId) { "The chat stream changed run identifiers." }
+                acceptedRunId
+            }
+
             is ChatStreamEvent.Delta -> {
                 checkNotNull(acceptedRunId) { "The chat stream emitted text before it was accepted." }
                 check(event.runId == acceptedRunId) { "The chat stream changed run identifiers." }
@@ -287,6 +296,11 @@ class WorkerStreamingClient private constructor(
             runId = requireNotNull(runId),
             conversationVersion = requireNotNull(conversationVersion),
             assistantMessageId = requireNotNull(assistantMessageId)
+        )
+
+        "status" -> ChatStreamEvent.Status(
+            runId = requireNotNull(runId), status = if (status == "Thinking") "Thinking" else "Replying",
+            model = if (model == "Meek Ultra") "Meek Ultra" else "Meek Standard"
         )
 
         "delta" -> ChatStreamEvent.Delta(

@@ -50,6 +50,18 @@ describe("streamChatText", () => {
     expect(chunks).toEqual(["hello", " there"]);
   });
 
+  it("passes bounded reasoning options while never forwarding private reasoning deltas", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(streamFromText([
+      'data: {"choices":[{"delta":{"reasoning":"private analysis"}}]}', '',
+      'data: {"choices":[{"delta":{"content":"My reply"}}]}', '', 'data: [DONE]', ''
+    ].join("\n"))));
+    vi.stubGlobal("fetch", fetchMock);
+    const chunks: string[] = [];
+    for await (const chunk of streamChatText(env, [], undefined, {reasoning: {enabled: true, effort: "low", exclude: true}, maxTokens: 2048})) chunks.push(chunk);
+    expect(chunks).toEqual(["My reply"]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({reasoning: {enabled: true, effort: "low", exclude: true}, max_tokens: 2048});
+  });
+
   it("requests configured model fallbacks in priority order", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(
       JSON.stringify({ choices: [{ message: { content: "ready" } }] }),

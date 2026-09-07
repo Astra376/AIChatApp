@@ -1,3 +1,5 @@
+import { characterPsychologyStatement, generateEmotionPortraits } from "../characterPsychology";
+import { characterDefaultPersonaStatement, ensurePersonaSchema } from "../personas";
 import { characterVoiceStatement } from "../voice";
 import type { RequestContext } from "../../env";
 import {
@@ -14,6 +16,11 @@ import { createId } from "../../lib/ids";
 import { completeChatText } from "../../providers/openrouter";
 import { toCharacterDto } from "./characterDto";
 
+function emptyPersonaToNull(input: unknown): unknown {
+  if (input && typeof input === "object" && ["name","backstory","appearance","pronouns"].every(key => !String((input as Record<string,unknown>)[key] ?? "").trim())) return null;
+  return input;
+}
+
 export interface CharacterWriteInput {
   name: string;
   tagline: string;
@@ -24,6 +31,8 @@ export interface CharacterWriteInput {
   visibility: "public" | "unlisted" | "private";
   avatarUrl: string | null;
   voiceId?: string | null;
+  psychologyDefaults?: unknown;
+  defaultPersona?: unknown;
 }
 
 export function parseCharacterVisibility(value: string): CharacterWriteInput["visibility"] {
@@ -34,6 +43,11 @@ export function parseCharacterVisibility(value: string): CharacterWriteInput["vi
 export async function createOwnedCharacter(context: RequestContext, input: CharacterWriteInput) {
   const id = createId("character");
   const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, id, input.voiceId, input.visibility)] : [];
+  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, id, input.psychologyDefaults));
+  if (input.defaultPersona !== undefined) {
+    await ensurePersonaSchema(context.env);
+    voiceStatements.push(characterDefaultPersonaStatement(context.env, id, emptyPersonaToNull(input.defaultPersona)));
+  }
   await insertCharacter(context.env, {
     id,
     ownerUserId: context.user!.userId,
@@ -47,6 +61,7 @@ export async function createOwnedCharacter(context: RequestContext, input: Chara
     avatarUrl: input.avatarUrl,
     now: Date.now()
   }, voiceStatements);
+  if (context.waitUntil && input.avatarUrl) context.waitUntil(generateEmotionPortraits(context, id).catch(() => undefined));
   return getCharacter(context, id);
 }
 
@@ -60,6 +75,11 @@ export async function updateOwnedCharacter(context: RequestContext, characterId:
   }
 
   const voiceStatements = input.voiceId ? [await characterVoiceStatement(context, characterId, input.voiceId, input.visibility)] : [];
+  if (input.psychologyDefaults != null) voiceStatements.push(await characterPsychologyStatement(context.env, characterId, input.psychologyDefaults));
+  if (input.defaultPersona !== undefined) {
+    await ensurePersonaSchema(context.env);
+    voiceStatements.push(characterDefaultPersonaStatement(context.env, characterId, emptyPersonaToNull(input.defaultPersona)));
+  }
   await updateCharacter(context.env, {
     id: characterId,
     ownerUserId: context.user!.userId,
@@ -74,6 +94,7 @@ export async function updateOwnedCharacter(context: RequestContext, characterId:
     now: Date.now()
   }, voiceStatements);
 
+  if (context.waitUntil && input.avatarUrl && input.avatarUrl !== current.avatar_url) context.waitUntil(generateEmotionPortraits(context, characterId).catch(() => undefined));
   return getCharacter(context, characterId);
 }
 

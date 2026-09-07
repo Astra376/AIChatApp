@@ -41,6 +41,31 @@ class WorkerStreamingClientTest {
     }
 
     @Test
+    fun reasoningStatusIsOptedInAndDoesNotInterruptDeltas() = runTest {
+        server.enqueue(sseResponse(listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID, conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            StreamEventDto(type = "status", runId = RUN_ID, status = "Thinking", model = "Meek Ultra"),
+            StreamEventDto(type = "delta", runId = RUN_ID, textDelta = "Hello"),
+            completedSendEvent()
+        )))
+        val events = client.continueAssistant(CONVERSATION_ID).toList()
+        assertThat(events.filterIsInstance<ChatStreamEvent.Status>().single().status).isEqualTo("Thinking")
+        assertThat(events.filterIsInstance<ChatStreamEvent.Delta>().single().textDelta).isEqualTo("Hello")
+        assertThat(server.takeRequest().getHeader("X-Chat-Status")).isEqualTo("1")
+    }
+
+    @Test
+    fun reasoningStatusForAnotherRunFailsValidation() = runTest {
+        server.enqueue(sseResponse(listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID, conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            StreamEventDto(type = "status", runId = "wrong-run", status = "Thinking"),
+            completedSendEvent()
+        )))
+        val error = runCatching { client.continueAssistant(CONVERSATION_ID).toList() }.exceptionOrNull()
+        assertThat(error).hasMessageThat().contains("changed run identifiers")
+    }
+
+    @Test
     fun continueAssistant_moreThanChannelCapacity_deliversEveryDeltaAndTerminal() = runTest {
         val deltas = List(128) { index ->
             StreamEventDto(type = "delta", runId = RUN_ID, textDelta = "$index,")

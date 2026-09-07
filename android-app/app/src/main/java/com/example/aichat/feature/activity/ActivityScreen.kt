@@ -45,6 +45,7 @@ fun ActivityRoute(
     onOpenConversation: (String, String) -> Unit = { _, _ -> },
     onOpenCharacter: (String) -> Unit = {},
     onOpenProfile: (String) -> Unit = {},
+    onOpenGroup: (String) -> Unit = {},
     viewModel: ActivityViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -83,6 +84,7 @@ fun ActivityRoute(
                         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable {
                             viewModel.markRead(item)
                             when {
+                                item.kind == "group" && item.conversationId != null -> onOpenGroup(item.conversationId)
                                 item.conversationId != null -> onOpenConversation(item.conversationId, item.characterId.orEmpty())
                                 item.characterId != null -> onOpenCharacter(item.characterId)
                                 item.actorUserId != null -> onOpenProfile(item.actorUserId)

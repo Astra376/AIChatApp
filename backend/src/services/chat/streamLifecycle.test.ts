@@ -31,6 +31,11 @@ const openRouterMocks = vi.hoisted(() => ({
   streamChatText: vi.fn()
 }));
 
+const policyMocks = vi.hoisted(() => ({resolveChatModel: vi.fn()}));
+const personaMocks = vi.hoisted(() => ({resolveConversationPersonaPrompt: vi.fn()}));
+vi.mock("./modelPolicy", () => policyMocks);
+vi.mock("../personas", () => personaMocks);
+
 const memoryMocks = vi.hoisted(() => ({
   buildCharacterMemoryPrompt: vi.fn(),
   composeCharacterSystemPrompt: vi.fn(),
@@ -251,6 +256,8 @@ function configureProvider(stopPoint: StopPoint): {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  policyMocks.resolveChatModel.mockImplementation(async (context: RequestContext) => ({env: context.env, reasoning: {enabled: false, exclude: true}, reasoningEnabled: false, maxTokens: 1200, displayName: "Meek Standard"}));
+  personaMocks.resolveConversationPersonaPrompt.mockResolvedValue("");
 
   schemaMocks.ensureConversationStreamingSchema.mockResolvedValue(undefined);
   characterMocks.getCharacterById.mockResolvedValue({
@@ -316,6 +323,20 @@ describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
       for (let next = await reader.read(); !next.done; next = await reader.read()) remaining += decoder.decode(next.value);
       expect(remaining).toContain('"textDelta":" second chunk"');
       expect(remaining).toContain('"type":"completed_');
+    });
+
+    it("negotiates status metadata after acceptance without exposing reasoning text", async () => {
+      configureTranscript(operation);
+      openRouterMocks.streamChatText.mockImplementation(async function* () {yield "Visible reply"});
+      const {context} = createContext();
+      context.request.headers.set("X-Chat-Status", "1");
+      policyMocks.resolveChatModel.mockResolvedValue({env: context.env, reasoning: {enabled: true, exclude: true}, reasoningEnabled: true, maxTokens: 2048, displayName: "Meek Ultra"});
+      const response = await startOperation(operation, context);
+      const events = (await response.text()).trim().split("\n\n").map(event => JSON.parse(event.slice(6)));
+      expect(events[0].type).toContain("accepted_");
+      expect(events[1]).toEqual({type: "status", runId: events[0].runId, status: "Thinking", model: "Meek Ultra"});
+      expect(events[2].type).toBe("delta");
+      expect(events.filter(event => event.type === "status")).toHaveLength(1);
     });
 
     it("stops before the first chunk without deleting or fabricating transcript state", async () => {

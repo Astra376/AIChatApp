@@ -41,3 +41,21 @@ describe("Ultra entitlements", () => {
     expect(mutations.some(sql => sql.includes("expires_at = 0"))).toBe(true);
   });
 });
+
+it("rejects a forged webhook before calling Stripe or mutating entitlements", async () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const context = { env: { STRIPE_SECRET_KEY: "sk", STRIPE_WEBHOOK_SECRET: "hook", STRIPE_ULTRA_PRICE_ID: "price", BILLING_RETURN_URL: "https://example.com" },
+    request: new Request("https://example.com/v1/ultra/webhook", { method: "POST", body: '{}', headers: { "Stripe-Signature": "t=1,v1=forged" } }) } as RequestContext;
+  await expect(handleStripeWebhook(context)).rejects.toMatchObject({ code: "INVALID_SIGNATURE" });
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("does not restore access from a late active event after cancellation", async () => {
+  const written: unknown[][] = [];
+  const env = { STRIPE_SECRET_KEY: "sk", STRIPE_WEBHOOK_SECRET: "hook", STRIPE_ULTRA_PRICE_ID: "price_ultra", BILLING_RETURN_URL: "https://example.com",
+    DB: { prepare: (_sql: string) => ({ bind: (...args: unknown[]) => ({ run: async () => { written.push(args); } }) }), batch: async () => [] } } as unknown as Env;
+  const raw = JSON.stringify({ type: "customer.subscription.updated", data: { object: { id: "sub_1", status: "active" } } });
+  const header = await signature(raw, "hook", Math.floor(Date.now() / 1000));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "sub_1", customer: "cus", status: "canceled", metadata: { user_id: "owner" }, items: { data: [{ price: { id: "price_ultra" }, current_period_end: Math.floor(Date.now()/1000)+3600 }] } }))));
+  await handleStripeWebhook({ env, request: new Request("https://example.com/v1/ultra/webhook", { method: "POST", body: raw, headers: { "Stripe-Signature": header } }) } as RequestContext);
+  expect(written[0][3]).toBe("canceled");
+});

@@ -10,6 +10,7 @@ OPENROUTER_PROVIDERS = "venice"
 OPENROUTER_ULTRA_MODEL = "deepseek/deepseek-v4-pro-0813"
 OPENROUTER_FALLBACK_MODELS = ""
 FAL_MODEL = "fal-ai/nano-banana-2"
+FAL_ULTRA_MODEL = "fal-ai/nano-banana-pro"
 R2_PUBLIC_BASE_URL = "https://character-chat-worker.robloxproxy.workers.dev/v1/assets"
 
 [[d1_databases]]

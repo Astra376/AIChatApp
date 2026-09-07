@@ -37,6 +37,18 @@ interface ProfileApi {
 }
 
 interface CharacterApi {
+    @POST("v1/characters/auto-create")
+    suspend fun autoCreate(@Body body: AutoCreateCharacterRequestDto): AutoCreateCharacterDto
+
+    @GET("v1/characters/{characterId}/psychology")
+    suspend fun psychology(@Path("characterId") characterId: String): CharacterPsychologyDefaultsDto
+
+    @GET("v1/characters/{characterId}/emotion-portraits")
+    suspend fun emotionPortraits(@Path("characterId") characterId: String): EmotionPortraitsDto
+
+    @POST("v1/characters/{characterId}/emotion-portraits")
+    suspend fun generateEmotionPortraits(@Path("characterId") characterId: String): EmotionPortraitsDto
+
     @POST("v1/characters")
     suspend fun createCharacter(@Body body: CharacterWriteRequestDto): CharacterDto
 
@@ -123,6 +135,9 @@ interface ChatApi {
 }
 
 interface ImageApi {
+    @POST("v1/images/upload-character-portrait")
+    suspend fun uploadPortrait(@Body body: okhttp3.RequestBody): GeneratePortraitResponseDto
+
     @POST("v1/images/generate-character-portrait")
     suspend fun generatePortrait(@Body body: GeneratePortraitRequestDto): GeneratePortraitResponseDto
 

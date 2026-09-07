@@ -585,6 +585,13 @@ class ChatRepository @Inject constructor(
                         applyAcceptedSend(conversationId, draftKey, event)
                     }
 
+                    is ChatStreamEvent.Status -> {
+                        if (!accepted || event.runId != acceptedRunId) throw StreamProtocolException("Invalid generation status.")
+                        updateActiveStream(conversationId, draftKey) { stream ->
+                            if (stream.runId == event.runId) stream.copy(generationStatus = event.status, modelLabel = event.model) else stream
+                        }
+                    }
+
                     is ChatStreamEvent.Delta -> {
                         if (!accepted) {
                             throw StreamProtocolException("The send stream emitted text before it was accepted.")
@@ -704,6 +711,13 @@ class ChatRepository @Inject constructor(
                         }
                     }
 
+                    is ChatStreamEvent.Status -> {
+                        if (!accepted || event.runId != acceptedRunId) throw StreamProtocolException("Invalid generation status.")
+                        updateActiveStream(conversationId, draftKey) { stream ->
+                            if (stream.runId == event.runId) stream.copy(generationStatus = event.status, modelLabel = event.model) else stream
+                        }
+                    }
+
                     is ChatStreamEvent.Delta -> {
                         if (!accepted) {
                             throw StreamProtocolException("The regeneration stream emitted text before it was accepted.")
@@ -811,6 +825,13 @@ class ChatRepository @Inject constructor(
                                 accepted = true,
                                 status = ActiveStreamStatus.STREAMING
                             )
+                        }
+                    }
+
+                    is ChatStreamEvent.Status -> {
+                        if (!accepted || event.runId != acceptedRunId) throw StreamProtocolException("Invalid generation status.")
+                        updateActiveStream(conversationId, draftKey) { stream ->
+                            if (stream.runId == event.runId) stream.copy(generationStatus = event.status, modelLabel = event.model) else stream
                         }
                     }
 

@@ -77,7 +77,7 @@ import kotlinx.coroutines.launch
             catch (error: Throwable) { stop(); _state.value = State(error = error.userFacingMessage("Voice could not be played.")) }
         }
     }
-    fun clearError() { _state.value = _state.value.copy(error = null) }
+    fun takeError(): String? { val error = _state.value.error; _state.value = _state.value.copy(error = null); return error }
     fun stop() { request?.cancel(); request = null; player?.release(); player = null; audioManager.abandonAudioFocusRequest(focus); _state.value = State() }
     override fun onCleared() { stop(); super.onCleared() }
 }
@@ -86,9 +86,8 @@ import kotlinx.coroutines.launch
     val model: ReadAloudViewModel = hiltViewModel()
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    LaunchedEffect(state.error) { state.error?.let {
+    LaunchedEffect(state.error) { model.takeError()?.let {
         if (onError != null) onError(it) else android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
-        model.clearError()
     } }
     IconButton(onClick = { model.read(conversationId, messageId) }, modifier = modifier) {
         if (state.id == messageId && state.preparing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

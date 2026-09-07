@@ -1,5 +1,7 @@
+import { ensurePlaySchema, hasPlayUltra, playConfigured } from "./play";
 import type { Env, RequestContext } from "../../env";
 import { AppError, assert } from "../../lib/errors";
+import { allowedStripePriceIds, annualPrice, billingCountry, marketForCountry, priceCatalog, type Cadence } from "./pricing";
 
 const schema = new WeakMap<D1Database, Promise<void>>();
 export async function ensureBillingSchema(env: Env): Promise<void> {
@@ -19,18 +21,27 @@ export function subscriptionGrantsUltra(status: string, expiresAt: number, now =
   return (status === "active" || status === "trialing") && expiresAt > now;
 }
 
-export async function hasUltra(env: Env, userId: string): Promise<boolean> {
-  if (!env.STRIPE_ULTRA_PRICE_ID) return false;
+async function hasStripeUltra(env: Env, userId: string): Promise<boolean> {
+  const prices = allowedStripePriceIds(env);
+  if (!prices.length) return false;
   await ensureBillingSchema(env);
   const row = await env.DB.prepare(`SELECT subscription_id FROM subscriptions
-    WHERE user_id = ? AND price_id = ? AND status IN ('active', 'trialing') AND expires_at > ? LIMIT 1`)
-    .bind(userId, env.STRIPE_ULTRA_PRICE_ID, Date.now()).first();
+    WHERE user_id = ? AND price_id IN (${prices.map(() => "?").join(",")}) AND status IN ('active', 'trialing') AND expires_at > ? LIMIT 1`)
+    .bind(userId, ...prices, Date.now()).first();
   return row !== null;
+}
+
+export async function hasUltra(env: Env, userId: string): Promise<boolean> {
+  return await hasStripeUltra(env, userId) || await hasPlayUltra(env, userId);
+}
+
+export async function requireUltra(env: Env, userId: string, feature = "This feature"): Promise<void> {
+  assert(await hasUltra(env, userId), 403, "ULTRA_REQUIRED", `${feature} requires Ultra.`);
 }
 
 function configured(env: Env): boolean {
   return Boolean(env.STRIPE_SECRET_KEY?.trim() && env.STRIPE_WEBHOOK_SECRET?.trim()
-    && env.STRIPE_ULTRA_PRICE_ID?.trim() && env.BILLING_RETURN_URL?.startsWith("https://"));
+    && allowedStripePriceIds(env).length && env.BILLING_RETURN_URL?.startsWith("https://"));
 }
 
 async function stripe<T>(env: Env, path: string, body?: URLSearchParams, idempotencyKey?: string): Promise<T> {
@@ -47,25 +58,51 @@ async function stripe<T>(env: Env, path: string, body?: URLSearchParams, idempot
 }
 
 interface StripePrice { active: boolean; currency: string; unit_amount: number | null; recurring?: { interval: string; interval_count: number }; }
+async function offersForRegion(context: RequestContext) {
+  const country = billingCountry(context);
+  const market = marketForCountry(country);
+  const configuredPrices = priceCatalog(context.env)[market.country] ?? {};
+  const offers = await Promise.all((["monthly", "annual"] as const).map(async cadence => {
+    const id = configuredPrices[cadence];
+    const expectedAmount = cadence === "annual" ? annualPrice(market.monthly) : market.monthly;
+    const interval = cadence === "annual" ? "year" : "month";
+    const price = configured(context.env) && id
+      ? await stripe<StripePrice>(context.env, `prices/${encodeURIComponent(id)}`).catch(() => undefined) : undefined;
+    const available = price?.active === true && price.currency === market.currency && price.unit_amount === expectedAmount
+      && price.recurring?.interval === interval && price.recurring.interval_count === 1;
+    return { cadence, available, currency: market.currency, unitAmount: expectedAmount, interval, intervalCount: 1,
+      annualSavingsPercent: cadence === "annual" ? 30 : 0 };
+  }));
+  return { country, market: market.country, offers };
+}
 export async function getUltra(context: RequestContext) {
-  const active = await hasUltra(context.env, context.user!.userId);
-  const available = configured(context.env);
-  let price: StripePrice | undefined;
-  if (available) price = await stripe(context.env, `prices/${encodeURIComponent(context.env.STRIPE_ULTRA_PRICE_ID!)}`);
-  return { active, available: available && price?.active === true && Boolean(price?.recurring) && price?.unit_amount != null,
+  const [stripeActive, playActive, regional] = await Promise.all([hasStripeUltra(context.env, context.user!.userId),
+    hasPlayUltra(context.env, context.user!.userId), offersForRegion(context)]);
+  const active = stripeActive || playActive;
+  const monthly = regional.offers[0];
+  return { active, billingProvider: stripeActive ? "stripe" : playActive ? "play" : null, playAvailable: playConfigured(context.env), available: regional.offers.some(offer => offer.available), ...regional,
     model: context.env.OPENROUTER_ULTRA_MODEL || "deepseek/deepseek-v4-pro-0813",
-    currency: price?.currency ?? null, unitAmount: price?.unit_amount ?? null,
-    interval: price?.recurring?.interval ?? null, intervalCount: price?.recurring?.interval_count ?? 1 };
+    currency: monthly.currency, unitAmount: monthly.unitAmount, interval: monthly.interval, intervalCount: 1,
+    capabilities: { customVoices: active, customFonts: active, profileCustomization: active, customBackgrounds: active,
+      appIcons: active, premiumPortraits: active, advancedCharacterDetails: active, expandedMemory: active } };
 }
 
-export async function createCheckout(context: RequestContext, requestKey: string) {
+export async function createCheckout(context: RequestContext, requestKey: string, cadence: Cadence = "monthly") {
   assert(/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey), 400, "INVALID_REQUEST", "Invalid checkout request.");
+  assert(cadence === "monthly" || cadence === "annual", 400, "INVALID_REQUEST", "Choose monthly or annual billing.");
   assert(!(await hasUltra(context.env, context.user!.userId)), 409, "ULTRA_ACTIVE", "Ultra is already active.");
-  const params = new URLSearchParams({ mode: "subscription", "line_items[0][price]": context.env.STRIPE_ULTRA_PRICE_ID ?? "",
-    "line_items[0][quantity]": "1", client_reference_id: context.user!.userId,
-    "subscription_data[metadata][user_id]": context.user!.userId,
+  const region = await offersForRegion(context);
+  assert(region.offers.find(offer => offer.cadence === cadence)?.available, 503, "BILLING_UNAVAILABLE", "This subscription is not available yet.");
+  const price = priceCatalog(context.env)[region.market]?.[cadence];
+  assert(price, 503, "BILLING_UNAVAILABLE", "This subscription is not available yet.");
+  const params = new URLSearchParams({ mode: "subscription", "line_items[0][price]": price,
+    "line_items[0][quantity]": "1", client_reference_id: context.user!.userId, billing_address_collection: "required",
+    "subscription_data[metadata][user_id]": context.user!.userId, "subscription_data[metadata][country]": region.country,
+    "subscription_data[metadata][cadence]": cadence,
     success_url: context.env.BILLING_RETURN_URL ?? "", cancel_url: context.env.BILLING_RETURN_URL ?? "" });
-  const session = await stripe<{ url: string }>(context.env, "checkout/sessions", params, `ultra-${context.user!.userId}-${requestKey}`);
+  // Do not supply payment_method_types: Stripe Checkout enables eligible cards and wallets,
+  // including Google Pay, from the merchant's Dashboard payment-method configuration.
+  const session = await stripe<{ url: string }>(context.env, "checkout/sessions", params, `ultra-${context.user!.userId}-${region.market}-${cadence}-${requestKey}`);
   assert(new URL(session.url).origin === "https://checkout.stripe.com", 502, "BILLING_ERROR", "Invalid checkout URL.");
   return { url: session.url };
 }
@@ -114,7 +151,7 @@ export async function handleStripeWebhook(context: RequestContext) {
   const current = await stripe<Subscription>(context.env, `subscriptions/${encodeURIComponent(subscriptionId)}`);
   const userId = current.metadata?.user_id;
   if (!userId) return { received: true };
-  const item = current.items.data.find(value => value.price.id === context.env.STRIPE_ULTRA_PRICE_ID);
+  const item = current.items.data.find(value => allowedStripePriceIds(context.env).includes(value.price.id));
   await ensureBillingSchema(context.env);
   if (!item) {
     await context.env.DB.prepare("UPDATE subscriptions SET status = 'canceled', expires_at = 0, updated_at = ? WHERE subscription_id = ?")
@@ -128,4 +165,12 @@ export async function handleStripeWebhook(context: RequestContext) {
     .bind(current.id, userId, current.customer, current.status, item.price.id,
       (item.current_period_end ?? current.current_period_end ?? 0) * 1000, Date.now()).run();
   return { received: true };
+}
+
+export async function ensureUltraSchema(env: Env): Promise<void> { await Promise.all([ensureBillingSchema(env), ensurePlaySchema(env)]); }
+export function activeUltraUserIdsSql(env: Env): {sql:string;bindings:unknown[]} {
+  const prices=allowedStripePriceIds(env), clauses:string[]=[], bindings:unknown[]=[];
+  if(prices.length) { clauses.push(`SELECT user_id FROM subscriptions WHERE price_id IN (${prices.map(()=>"?").join(",")}) AND status IN ('active','trialing') AND expires_at>?`); bindings.push(...prices,Date.now()); }
+  if(playConfigured(env)) { clauses.push("SELECT user_id FROM play_subscriptions WHERE product_id=? AND status='active' AND expires_at>? AND verified_at>?"); bindings.push(env.PLAY_ULTRA_PRODUCT_ID,Date.now(),Date.now()-3_600_000); }
+  return {sql:clauses.length?clauses.join(" UNION "):"SELECT user_id FROM subscriptions WHERE 0",bindings};
 }

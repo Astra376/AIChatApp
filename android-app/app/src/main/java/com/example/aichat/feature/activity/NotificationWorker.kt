@@ -48,12 +48,12 @@ class NotificationWorker(context: Context, parameters: WorkerParameters) : Corou
             if (repository.appVisible || repository.currentUserId() != userId) return Result.success()
             pending.items.sortedBy { it.updatedAt }.forEach { item ->
                 val enabled = when (item.kind) {
-                    "chat" -> settings.chatMessagesEnabled
+                    "chat", "group" -> settings.chatMessagesEnabled
                     "follower" -> settings.followersEnabled
                     else -> settings.characterUpdatesEnabled
                 }
                 if (enabled) {
-                    val channel = if (item.kind == "chat") CHAT_CHANNEL else ACTIVITY_CHANNEL
+                    val channel = if (item.kind in listOf("chat", "group")) CHAT_CHANNEL else ACTIVITY_CHANNEL
                     val intent = Intent(applicationContext, MainActivity::class.java).apply {
                         action = Intent.ACTION_VIEW
                         data = notificationUri(item)
@@ -70,8 +70,8 @@ class NotificationWorker(context: Context, parameters: WorkerParameters) : Corou
                         .setAutoCancel(true)
                         .setOnlyAlertOnce(true)
                         .setWhen(item.createdAt)
-                        .setGroup(if (item.kind == "chat") "meek-chats" else "meek-activity")
-                        .setCategory(if (item.kind == "chat") NotificationCompat.CATEGORY_MESSAGE else NotificationCompat.CATEGORY_SOCIAL)
+                        .setGroup(if (item.kind in listOf("chat", "group")) "meek-chats" else "meek-activity")
+                        .setCategory(if (item.kind in listOf("chat", "group")) NotificationCompat.CATEGORY_MESSAGE else NotificationCompat.CATEGORY_SOCIAL)
                         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                         .build()
                     // Permission can be revoked between the check and notify; the worker retries safely.
@@ -117,6 +117,7 @@ class NotificationWorker(context: Context, parameters: WorkerParameters) : Corou
 }
 
 fun notificationUri(item: ActivityNotificationDto): Uri = when {
+    item.kind == "group" && item.conversationId != null -> Uri.Builder().scheme("meek").authority("group").appendPath(item.conversationId).build()
     item.conversationId != null -> Uri.Builder().scheme("meek").authority("chat").appendPath(item.conversationId).build()
     item.characterId != null -> Uri.Builder().scheme("meek").authority("character").appendPath(item.characterId).build()
     item.actorUserId != null -> Uri.Builder().scheme("meek").authority("profile").appendPath(item.actorUserId).build()

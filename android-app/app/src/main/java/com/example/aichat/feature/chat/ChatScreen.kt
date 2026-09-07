@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +46,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.animation.Crossfade
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -83,6 +85,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.aichat.core.auth.AuthRepository
 import com.example.aichat.core.design.AppIcon
 import com.example.aichat.core.design.AppIcons
@@ -159,7 +162,8 @@ class ChatViewModel @Inject constructor(
     private val conversationRepository: com.example.aichat.feature.chatlist.ConversationRepository,
     private val chatBackgroundRepository: ChatBackgroundRepository,
     private val authRepository: AuthRepository,
-    settingsRepository: com.example.aichat.feature.profile.SettingsRepository
+    settingsRepository: com.example.aichat.feature.profile.SettingsRepository,
+    private val personaIdentity: com.example.aichat.feature.persona.PersonaIdentityRepository
 ) : ViewModel() {
     private val conversationId: String = checkNotNull(savedStateHandle["conversationId"])
     private val composerText = MutableStateFlow(savedStateHandle.get<String>("composerDraft").orEmpty())
@@ -182,15 +186,15 @@ class ChatViewModel @Inject constructor(
         combine(composerText, isStartingNewChat, chatRepository.observeMutationBusy(conversationId), settingsRepository.streamingHaptics) { composer, startingNewChat, mutating, haptics ->
             ComposerState(composer, startingNewChat, mutating, haptics)
         },
-        authRepository.sessionState,
+        combine(authRepository.sessionState, personaIdentity.observeName(conversationId)) { session, name -> session to name },
         chatRepository.observeMessageCount(conversationId)
-    ) { conversation, activeStream, composerState, session, messageCount ->
+    ) { conversation, activeStream, composerState, identity, messageCount ->
         ChatUiState(
             conversation = conversation,
             activeStream = activeStream,
             composerText = composerState.text,
-            currentUserName = session.profile?.displayName ?: "You",
-            currentUserAvatarUrl = session.profile?.avatarUrl,
+            currentUserName = identity.second ?: identity.first.profile?.displayName ?: "You",
+            currentUserAvatarUrl = identity.first.profile?.avatarUrl,
             canLoadOlderMessages = conversation != null && conversation.messages.size < messageCount,
             isStartingNewChat = composerState.starting,
             isMutating = composerState.mutating,
@@ -203,6 +207,7 @@ class ChatViewModel @Inject constructor(
     )
 
     init {
+        viewModelScope.launch { personaIdentity.ensureLoaded(conversationId) }
         viewModelScope.launch {
             chatRepository.refreshConversation(conversationId)
                 .onFailure { if (uiState.value.conversation == null) _events.emit(it.userFacingMessage("Couldn't load conversation.")) }
@@ -383,10 +388,37 @@ fun ChatRoute(
     onOpenCharacterProfile: (String) -> Unit = {},
     onOpenCreatorProfile: (String) -> Unit = {},
     onUpgradeUltra: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     com.example.aichat.feature.voice.ReadAloudLifecycle()
+    val preferencesModel: ChatPreferencesViewModel = hiltViewModel()
+    val preferences by preferencesModel.preferences.collectAsStateWithLifecycle()
+    var showPreferences by remember { mutableStateOf(false) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val atmosphere: ChatAtmosphereViewModel = hiltViewModel()
+    val emotionPortrait by atmosphere.portrait.collectAsStateWithLifecycle()
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val lastMessage = state.conversation?.messages?.maxByOrNull { it.position }
+    LaunchedEffect(state.conversation?.character?.id, lastMessage?.id, lastMessage?.updatedAt, state.isStreamBusy) {
+        val characterId = state.conversation?.character?.id ?: return@LaunchedEffect
+        if (!state.isStreamBusy) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            atmosphere.refresh(characterId)
+            kotlinx.coroutines.delay(2_000)
+            atmosphere.refresh(characterId)
+            kotlinx.coroutines.delay(5_000)
+            atmosphere.refresh(characterId)
+            repeat(20) {
+                if (!atmosphere.portraitsGenerating) return@repeatOnLifecycle
+                kotlinx.coroutines.delay(5_000)
+                atmosphere.refreshPortraits(characterId)
+            }
+        }
+    }
+    androidx.lifecycle.compose.LifecycleResumeEffect(preferencesModel) {
+        preferencesModel.refresh()
+        onPauseOrDispose { }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     var actionMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
@@ -411,11 +443,16 @@ fun ChatRoute(
         }
     }
 
+    CompositionLocalProvider(
+        LocalChatFont provides chatFontFamily(preferences.chatFont),
+        LocalGenerationLabel provides state.activeStream?.generationStatus.orEmpty()
+    ) {
     ChatScreenContent(
         paddingValues = paddingValues,
         onBack = onBack,
         onOpenMemory = onOpenMemory,
         state = state.copy(composerText = viewModel.editorText),
+        emotionPortraitUrl = emotionPortrait,
         snackbarHostState = snackbarHostState,
         onComposerChanged = viewModel::onComposerChanged,
         onSend = viewModel::send,
@@ -427,6 +464,8 @@ fun ChatRoute(
         onOpenCharacterProfile = onOpenCharacterProfile,
         onOpenCreatorProfile = onOpenCreatorProfile,
         onUpgradeUltra = onUpgradeUltra,
+        onOpenPersonas = onOpenPersonas,
+        onChatPreferences = { showPreferences = true },
         onLoadOlderMessages = viewModel::loadOlderMessages,
         onMessageLongPress = { if (!state.isStreamBusy && !state.isMutating) actionMessage = it },
         onSelectVariant = { message, index ->
@@ -448,6 +487,9 @@ fun ChatRoute(
             }
         }
     )
+
+    }
+    if (showPreferences) ChatPreferencesSheet(onDismiss = { showPreferences = false }, onUpgrade = onUpgradeUltra, model = preferencesModel)
 
     actionMessage?.let { message ->
         val isLatestAssistant = messages.firstOrNull()?.takeIf { it.role == MessageRole.ASSISTANT && it.sendState == MessageSendState.SENT }?.id == message.id
@@ -526,6 +568,9 @@ internal fun ChatScreenContent(
     onOpenCharacterProfile: (String) -> Unit = {},
     onOpenCreatorProfile: (String) -> Unit = {},
     onUpgradeUltra: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
+    onChatPreferences: () -> Unit = {},
+    emotionPortraitUrl: String? = null,
     onLoadOlderMessages: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
     onSelectVariant: (ChatMessage, Int) -> Unit,
@@ -669,6 +714,7 @@ internal fun ChatScreenContent(
             ) {
                 ChatSceneBackground(
                     imageUrl = state.conversation?.backgroundSceneUrl,
+                    emotionPortraitUrl = emotionPortraitUrl,
                     onLoadFailed = onBackgroundLoadFailed
                 )
                 Column(modifier = Modifier.fillMaxSize()) {
@@ -731,6 +777,8 @@ internal fun ChatScreenContent(
                 characterId = character.id,
                 onDismissRequest = { showCharacterDetails = false },
                 onViewCharacterProfile = onOpenCharacterProfile,
+                onChatPreferences = onChatPreferences,
+                onOpenPersonas = onOpenPersonas,
                 onViewCreatorProfile = onOpenCreatorProfile,
                 onRefreshChat = {
                     onRefreshChat()
@@ -769,6 +817,7 @@ private fun List<ChatMessage>.sortedForReverseLayout(): List<ChatMessage> {
 @Composable
 private fun ChatSceneBackground(
     imageUrl: String?,
+    emotionPortraitUrl: String? = null,
     onLoadFailed: (String) -> Unit
 ) {
     val fallback = MaterialTheme.colorScheme.background
@@ -788,6 +837,7 @@ private fun ChatSceneBackground(
             .fillMaxSize()
             .background(fallback)
     ) {
+        if (request == null) com.example.aichat.core.ui.LocalAppBackdrop.current()
         if (request != null) {
             AsyncImage(
                 model = request,
@@ -804,6 +854,15 @@ private fun ChatSceneBackground(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background.copy(alpha = 0.58f))
         )
+        if (emotionPortraitUrl != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context).data(emotionPortraitUrl).crossfade(800).build(),
+                contentDescription = null, contentScale = ContentScale.Crop,
+                alignment = Alignment.BottomCenter,
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
+                    .graphicsLayer { alpha = 0.28f }
+            )
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1156,9 +1215,9 @@ private fun MessageBubble(
     val isUser = message.role == MessageRole.USER
     val background = MaterialTheme.colorScheme.background
     val bubbleColor = if (isUser) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.98f).compositeOver(background)
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f).compositeOver(background)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.91f)
     }
     val avatarName = if (isUser) currentUserName else characterName
     val avatarUrl = if (isUser) currentUserAvatarUrl else characterAvatarUrl
@@ -1494,7 +1553,7 @@ private fun MessageSurfaceContent(
             } else {
                 Text(
                     text = roleplayAnnotatedText(text),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = LocalChatFont.current ?: MaterialTheme.typography.bodyLarge.fontFamily),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -1528,7 +1587,7 @@ private fun DraftBubble(
             Surface(
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f).compositeOver(background),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.91f),
                 shadowElevation = 2.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -1537,7 +1596,7 @@ private fun DraftBubble(
                     } else {
                         Text(
                             text = roleplayAnnotatedText(content),
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = LocalChatFont.current ?: MaterialTheme.typography.bodyLarge.fontFamily),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -1570,6 +1629,10 @@ private fun roleplayAnnotatedText(value: String) = formatRoleplayText(
 
 @Composable
 private fun TypingDotsIndicator(modifier: Modifier = Modifier) {
+    if (LocalGenerationLabel.current == "Thinking") {
+        ReasoningStatusWord(modifier)
+        return
+    }
     val transition = rememberInfiniteTransition()
     Row(
         modifier = modifier.height(18.dp),
@@ -1608,7 +1671,7 @@ private fun TypingDotsIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun rememberTypedStreamText(
+internal fun rememberTypedStreamText(
     streamKey: String?,
     sourceText: String,
     animate: Boolean,

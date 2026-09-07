@@ -42,6 +42,13 @@ export function portraitModel(env: Env, style: PortraitStyle, expression = false
     ? style === "stylized" ? env.OPENROUTER_EXPRESSION_STYLIZED_MODEL : env.OPENROUTER_EXPRESSION_REALISTIC_MODEL
     : style === "stylized" ? env.OPENROUTER_PORTRAIT_STYLIZED_MODEL : env.OPENROUTER_PORTRAIT_REALISTIC_MODEL) || IMAGE_MODELS.nano;
 }
+export function characterArtSettings(env: Env, style: PortraitStyle): Pick<ImageInput, "model" | "quality"> {
+  const model = (style === "stylized" ? env.OPENROUTER_EXPRESSION_STYLIZED_MODEL : env.OPENROUTER_EXPRESSION_REALISTIC_MODEL) || IMAGE_MODELS.transparentMini;
+  const configured = style === "stylized" ? env.OPENROUTER_EXPRESSION_STYLIZED_QUALITY : env.OPENROUTER_EXPRESSION_REALISTIC_QUALITY;
+  // Native alpha does not require the expensive high-quality tier.
+  const quality = configured === "high" || configured === "low" ? configured : "medium";
+  return { model, quality };
+}
 export function imageRequest(input: ImageInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: input.model, prompt: input.prompt, n: 1, aspect_ratio: input.aspectRatio ?? "1:1",

@@ -1,0 +1,283 @@
+{
+  "run": "affordable_alpha_20260907_v1",
+  "results": [
+    {
+      "id": "photo_mini_high",
+      "label": "photo neutral / mini_high",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "failed",
+      "error": "IMAGE_ALPHA_UNSUPPORTED",
+      "durationMs": 0
+    },
+    {
+      "id": "photo_gpt_medium",
+      "label": "photo neutral / gpt_medium",
+      "requestedModel": "openai/gpt-image-1",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_photo_gpt_medium.png",
+      "model": "openai/gpt-image-1",
+      "cost": 0.06623,
+      "durationMs": 25756
+    },
+    {
+      "id": "photo_mini_medium",
+      "label": "photo neutral / mini_medium",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_photo_mini_medium.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.015572,
+      "durationMs": 24971
+    },
+    {
+      "id": "anime_gpt_medium",
+      "label": "anime neutral / gpt_medium",
+      "requestedModel": "openai/gpt-image-1",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_gpt_medium.png",
+      "model": "openai/gpt-image-1",
+      "cost": 0.06623,
+      "durationMs": 29311
+    },
+    {
+      "id": "anime_mini_medium",
+      "label": "anime neutral / mini_medium",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_mini_medium.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.015572,
+      "durationMs": 26761
+    },
+    {
+      "id": "anime_mini_high",
+      "label": "anime neutral / mini_high",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_mini_high.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.05282,
+      "durationMs": 46762
+    },
+    {
+      "id": "photo_mini_high_sad",
+      "label": "photo sadness / mini_high",
+      "reference": "photo_mini_high",
+      "status": "skipped",
+      "error": "REFERENCE_FAILED"
+    },
+    {
+      "id": "photo_mini_medium_sad",
+      "label": "photo sadness / mini_medium",
+      "reference": "photo_mini_medium",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_photo_mini_medium_sad.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.016738,
+      "durationMs": 21800
+    },
+    {
+      "id": "photo_gpt_medium_sad",
+      "label": "photo sadness / gpt_medium",
+      "reference": "photo_gpt_medium",
+      "requestedModel": "openai/gpt-image-1",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_photo_gpt_medium_sad.png",
+      "model": "openai/gpt-image-1",
+      "cost": 0.067285,
+      "durationMs": 22725
+    },
+    {
+      "id": "anime_gpt_medium_sad",
+      "label": "anime sadness / gpt_medium",
+      "reference": "anime_gpt_medium",
+      "requestedModel": "openai/gpt-image-1",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_gpt_medium_sad.png",
+      "model": "openai/gpt-image-1",
+      "cost": 0.067285,
+      "durationMs": 27962
+    },
+    {
+      "id": "anime_mini_medium_sad",
+      "label": "anime sadness / mini_medium",
+      "reference": "anime_mini_medium",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_mini_medium_sad.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.016738,
+      "durationMs": 23535
+    },
+    {
+      "id": "anime_mini_high_sad",
+      "label": "anime sadness / mini_high",
+      "reference": "anime_mini_high",
+      "requestedModel": "openai/gpt-image-1-mini",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Faffordable_alpha_20260907_v1_anime_mini_high_sad.png",
+      "model": "openai/gpt-image-1-mini",
+      "cost": 0.053986,
+      "durationMs": 47657
+    }
+  ],
+  "alphaInspection": {
+    "photo_mini_medium": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 40.61,
+      "opaquePercent": 58.59,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "anime_mini_high_sad": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 47.63,
+      "opaquePercent": 51.74,
+      "cornerAlpha": [
+        128,
+        110,
+        113,
+        78
+      ]
+    },
+    "anime_gpt_medium_sad": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 43.7,
+      "opaquePercent": 55.96,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "photo_gpt_medium_sad": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 36.75,
+      "opaquePercent": 62.61,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "anime_mini_medium_sad": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 43.22,
+      "opaquePercent": 56.48,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "anime_mini_medium": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 46.09,
+      "opaquePercent": 53.62,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "anime_mini_high": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 47.57,
+      "opaquePercent": 51.71,
+      "cornerAlpha": [
+        3,
+        0,
+        3,
+        0
+      ]
+    },
+    "anime_gpt_medium": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 43.06,
+      "opaquePercent": 56.61,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "photo_gpt_medium": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 38.12,
+      "opaquePercent": 60.87,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "photo_mini_medium_sad": {
+      "size": [
+        1024,
+        1536
+      ],
+      "mode": "RGBA",
+      "clearPercent": 40.58,
+      "opaquePercent": 58.74,
+      "cornerAlpha": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "selected": {
+    "model": "openai/gpt-image-1-mini",
+    "quality": "medium",
+    "estimatedSixImageSetUsd": 0.099262,
+    "estimateMethod": "Measured neutral plus five times measured sadness edit; other emotions not purchased in this comparison."
+  }
+}

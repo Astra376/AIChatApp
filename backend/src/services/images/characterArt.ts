@@ -3,7 +3,7 @@ import { getCharacterById } from "../../db/queries/characters";
 import { assert, AppError } from "../../lib/errors";
 import { createId } from "../../lib/ids";
 import { publicAssetUrl } from "../../lib/assets";
-import { IMAGE_MODELS, portraitStyle } from "../../providers/openrouterImages";
+import { characterArtSettings, portraitStyle } from "../../providers/openrouterImages";
 import { imageJobStatus, queueImage, type QueuedImageJob } from "./jobs";
 import { upperBodyPrompt, expressionPrompt } from "./characterArtPrompts";
 
@@ -100,10 +100,8 @@ export async function resumeEmotionPortraits(env: Env, characterId?: string) {
         const saved = await env.ASSETS.head(sourceKey);
         const knownStyle = saved?.customMetadata?.style;
         const style = knownStyle === "realistic" || knownStyle === "stylized" ? knownStyle : portraitStyle(row.description || "");
-        const model = (style === "stylized" ? env.OPENROUTER_EXPRESSION_STYLIZED_MODEL : env.OPENROUTER_EXPRESSION_REALISTIC_MODEL) || IMAGE_MODELS.transparent;
         job = await queueImage(env, {
-          image: { model, background: "transparent", aspectRatio: "2:3",
-            ...(model === IMAGE_MODELS.transparent ? { quality: "high" as const } : {}),
+          image: { ...characterArtSettings(env, style), background: "transparent", aspectRatio: "2:3",
             prompt: row.emotion === "neutral" ? upperBodyPrompt : expressionPrompt(row.emotion),
             referenceImageUrl: row.emotion === "neutral" ? row.source_url : row.neutral_url! },
           outputKey: `character-art/${row.owner_user_id}/${row.attempt_id}_${row.emotion}.png`, style, fallback: false

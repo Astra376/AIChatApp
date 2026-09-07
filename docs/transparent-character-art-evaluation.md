@@ -1,5 +1,7 @@
 # Separate profile portraits and transparent character artwork
 
+The high-quality body model and pricing below are the historical baseline. Production now uses the cheaper tier selected in [the follow-up comparison](affordable-character-art-evaluation.md). The portrait choices and transparent-art architecture remain unchanged.
+
 Tested 7 September 2026 through the production Worker's OpenRouter Images API. No Fal image submissions and no built-in image-generation substitution.
 
 | Role | Selected model | Output |

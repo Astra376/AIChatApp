@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { Env } from "../env";
-import { generateImageWithFallback, generateImageWithOpenRouter, imageRequest, IMAGE_MODELS, portraitStyle, storeGeneratedImage } from "./openrouterImages";
+import { generateImageWithFallback, generateImageWithOpenRouter, imageRequest, characterArtSettings, IMAGE_MODELS, portraitStyle, storeGeneratedImage } from "./openrouterImages";
 const env = { OPENROUTER_API_KEY: "test-key", OPENROUTER_PROVIDERS: "venice" } as Env;
 const jpeg = btoa(String.fromCharCode(255, 216, 255, 1));
 const result = () => new Response(JSON.stringify({ data: [{ b64_json: jpeg, media_type: "image/png" }], usage: { cost: 0.035 } }));
@@ -53,4 +53,17 @@ it("requires native PNG alpha and does not substitute an opaque fallback", async
   expect(fetch).toHaveBeenCalledOnce();
   await expect(generateImageWithOpenRouter(env, { model: IMAGE_MODELS.nano, prompt: "body", background: "transparent" })).rejects.toMatchObject({ code: "IMAGE_ALPHA_UNSUPPORTED" });
   expect(fetch).toHaveBeenCalledOnce();
+});
+
+it("keeps alpha output independent from the generation quality budget", () => {
+  for (const style of ["realistic", "stylized"] as const) {
+    expect(characterArtSettings({} as Env, style)).toEqual({ model: IMAGE_MODELS.transparentMini, quality: "medium" });
+  }
+  const settings = characterArtSettings({ OPENROUTER_EXPRESSION_STYLIZED_MODEL: IMAGE_MODELS.transparentMini } as Env, "stylized");
+  expect(settings).toEqual({ model: IMAGE_MODELS.transparentMini, quality: "medium" });
+  expect(imageRequest({ ...settings, prompt: "same character", background: "transparent", aspectRatio: "2:3" })).toMatchObject({
+    model: IMAGE_MODELS.transparentMini, quality: "medium", background: "transparent", output_format: "png", aspect_ratio: "2:3"
+  });
+  expect(characterArtSettings({ OPENROUTER_EXPRESSION_REALISTIC_QUALITY: "typo" } as Env, "realistic").quality).toBe("medium");
+  expect(characterArtSettings({ OPENROUTER_EXPRESSION_REALISTIC_QUALITY: "high" } as Env, "realistic").quality).toBe("high");
 });

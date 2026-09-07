@@ -102,7 +102,7 @@ class ProfileViewModel @Inject constructor(
     private val userId = authRepository.sessionState.value.profile?.userId.orEmpty()
     private val isLoading = MutableStateFlow(true)
     private val followState = MutableStateFlow<FollowStateDto?>(null)
-    val showcase = MutableStateFlow<ShowcaseDto?>(null)
+    val showcase = MutableStateFlow(appearanceRepository.cachedShowcase(userId))
     private var followRefresh: kotlinx.coroutines.Job? = null
 
     val uiState: StateFlow<ProfileUiState> = combine(
@@ -157,7 +157,7 @@ class ProfileViewModel @Inject constructor(
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = ProfileUiState()
+        initialValue = ProfileUiState(displayName = authRepository.sessionState.value.profile?.displayName.orEmpty(), avatarUrl = authRepository.sessionState.value.profile?.avatarUrl, userId = userId)
     )
 
     init {
@@ -207,6 +207,7 @@ fun ProfileRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val showcase by viewModel.showcase.collectAsStateWithLifecycle()
+    val appearance = com.example.aichat.feature.customization.LocalAppearance.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val chatLauncher = rememberCharacterChatLauncher(
@@ -230,11 +231,11 @@ fun ProfileRoute(
         ) {
 
             item(span = { GridItemSpan(maxLineSpan) }) {
-                if (state.isLoading) {
+                if (state.displayName.isBlank()) {
                     ProfileHeaderPlaceholder()
                 } else {
                     AppearanceProfileHeader(
-                        appearance = showcase?.appearance ?: com.example.aichat.feature.customization.AppearanceDto(),
+                        appearance = appearance,
                         name = state.displayName,
                         avatarUrl = state.avatarUrl,
                         stats = buildList {
@@ -245,7 +246,7 @@ fun ProfileRoute(
                     )
                 }
             }
-            showcase?.let { published ->
+            showcase?.takeIf { appearance.ultra }?.let { published ->
                 item(span = { GridItemSpan(maxLineSpan) }) { ShowcaseWidgets(published, onCharacter = { chatLauncher.open(it) }) }
             }
             state.bio?.takeIf { it.isNotBlank() }?.let { bio ->
@@ -287,7 +288,7 @@ fun ProfileRoute(
             item(span = { GridItemSpan(maxLineSpan) }) {
                 IconPillButton(text = "Customize profile & appearance", onClick = onOpenAppearance, modifier = Modifier.fillMaxWidth())
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            if (!appearance.ultra) item(span = { GridItemSpan(maxLineSpan) }) {
                 Surface(
                     onClick = onUpgradeUltra,
                     shape = RoundedCornerShape(16.dp),

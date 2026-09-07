@@ -142,7 +142,10 @@ class ChatRepositoryTest {
         assertThat(messages.count { it.role == "ASSISTANT" }).isEqualTo(1)
         assertThat(messages[0].role).isEqualTo("USER")
         assertThat(messages[1].id).isEqualTo("assistant-1")
-        assertThat(activeStream).isNull()
+        assertThat(activeStream?.status).isEqualTo(ActiveStreamStatus.COMPLETED)
+        assertThat(activeStream?.text).isNotEmpty()
+        repository.finishDisplaying(CONVERSATION_ID, checkNotNull(activeStream).draftKey)
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()).isNull()
     }
 
     @Test
@@ -375,7 +378,10 @@ class ChatRepositoryTest {
 
         assertThat(message?.selectedRegenerationId).isEqualTo("regen-1")
         assertThat(regenerations.map(AssistantRegenerationEntity::id)).containsExactly("regen-1")
-        assertThat(activeStream).isNull()
+        assertThat(activeStream?.status).isEqualTo(ActiveStreamStatus.COMPLETED)
+        assertThat(activeStream?.text).isNotEmpty()
+        repository.finishDisplaying(CONVERSATION_ID, checkNotNull(activeStream).draftKey)
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()).isNull()
     }
 
     @Test
@@ -694,7 +700,9 @@ class ChatRepositoryTest {
         events.emit(ChatStreamEvent.CompletedSend("run-live", 2,
             remoteMessage("assistant-live", 1, "assistant", "First second", 100, 100),
             conversationSummary(2, "First second")))
-        repository.observeActiveStream(CONVERSATION_ID).first { it == null }
+        val completed = checkNotNull(repository.observeActiveStream(CONVERSATION_ID).first { it?.status == ActiveStreamStatus.COMPLETED })
+        repository.finishDisplaying(CONVERSATION_ID, completed.draftKey)
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()).isNull()
         assertThat(messageDao.getById("assistant-live")?.content).isEqualTo("First second")
     }
 

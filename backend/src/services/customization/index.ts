@@ -55,8 +55,9 @@ async function sign(env: Env, value: string) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SESSION_HMAC_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))), x => x.toString(16).padStart(2,"0")).join("");
 }
+export const APPEARANCE_PRESET_IDS = ["preset:default", "preset:aurora", "preset:midnight", "preset:rose", "preset:paper"];
 async function assetUrl(context: RequestContext, id: string, ownerId: string): Promise<string | null> {
-  if (!id) return null;
+  if (!id || APPEARANCE_PRESET_IDS.includes(id)) return null;
   const asset = await context.env.DB.prepare("SELECT id FROM appearance_assets WHERE id=? AND user_id=?").bind(id,ownerId).first();
   if (!asset) return null;
   const expires = Date.now() + 3_600_000;
@@ -80,7 +81,7 @@ export async function saveAppearance(context: RequestContext, input: unknown) {
   const userId = context.user!.userId;
   const next = validateAppearance(input, await stored(context.env,userId));
   for (const [id,kind] of [[next.bannerId,"banner"],[next.profileBackgroundId,"background"],[next.backgroundId,"background"]]) {
-    if (!id) continue;
+    if (!id || APPEARANCE_PRESET_IDS.includes(id)) continue;
     assert(await context.env.DB.prepare("SELECT id FROM appearance_assets WHERE id=? AND user_id=? AND kind=?").bind(id,userId,kind).first(), 400,"INVALID_APPEARANCE","Choose one of your uploaded images.");
   }
   if (next.featuredCharacterId) assert(await context.env.DB.prepare("SELECT id FROM characters WHERE id=? AND visibility='public'").bind(next.featuredCharacterId).first(),400,"INVALID_APPEARANCE","Only public characters can be featured.");

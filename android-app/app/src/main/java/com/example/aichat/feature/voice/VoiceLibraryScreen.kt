@@ -66,6 +66,7 @@ import kotlinx.coroutines.launch
     val model: VoiceLibraryViewModel = hiltViewModel()
     val player: ReadAloudViewModel = hiltViewModel()
     val state by model.state.collectAsStateWithLifecycle()
+    val isUltra = com.example.aichat.feature.customization.LocalAppearance.current.ultra
     val playback by player.state.collectAsStateWithLifecycle()
     var creating by rememberSaveable { mutableStateOf(false) }
     var upgrade by rememberSaveable { mutableStateOf(false) }
@@ -75,7 +76,7 @@ import kotlinx.coroutines.launch
         if (upgrade && !startCreating) { upgrade = false; model.refresh() } else leaveCreate()
     }
     fun beginCreate() {
-        if (state.canCreate) creating = true
+        if (isUltra) creating = true
         else if (onUpgradeUltra != null && !startCreating) onUpgradeUltra() else upgrade = true
     }
     LaunchedEffect(startCreating, state.loading) {

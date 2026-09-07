@@ -90,6 +90,7 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val characters by viewModel.charactersList.collectAsStateWithLifecycle()
+    val isUltra = LocalAppearance.current.ultra
     val context=LocalContext.current
     androidx.lifecycle.compose.LifecycleResumeEffect(viewModel) { viewModel.refreshAccess(); onPauseOrDispose { } }
     var uploadTarget by remember { mutableStateOf("background") }
@@ -97,18 +98,20 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
     var prompt by remember { mutableStateOf("") }
     val picker=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.upload(context,uploadTarget,it) } }
     ScreenBackgroundBox {
-        LazyColumn(modifier=Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
+        LazyColumn(modifier=Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
             item { Row(verticalAlignment=Alignment.CenterVertically) { AppBackButton(onClick=onBack); Text("Your Meek",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f)); if(draft.ultra) TextButton(onClick={viewModel.save(context)},enabled=!busy) { Text("Save") } } }
             if(busy) item { LinearProgressIndicator(modifier=Modifier.fillMaxWidth()) }
             status?.let { message -> item { Text(message,style=MaterialTheme.typography.bodyMedium) } }
-            if(!draft.ultra && !busy) {
+            if(!isUltra && !busy) {
                 item { Card { Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) { Text("Make Meek yours",style=MaterialTheme.typography.headlineSmall); Text("Ultra unlocks profile frames, fonts, featured characters, backgrounds and custom app icons."); Button(onClick=onUpgradeUltra) { Text("Explore Meek Ultra") } } } }
-            } else if(draft.ultra) {
+            } else if(isUltra) {
                 item { Text("Profile",style=MaterialTheme.typography.titleLarge) }
                 item { AppearanceProfileHeader(name="Your profile",avatarUrl=null,stats=emptyList(),appearance=draft) }
                 item { ChoiceRow("Profile font",listOf("default","sans","serif","mono","rounded"),draft.profileFont,!busy) { viewModel.edit(draft.copy(profileFont=it)) } }
-                item { ChoiceRow("Profile frame",listOf("none","halo","orbit","laurel","prism"),draft.frame,!busy) { viewModel.edit(draft.copy(frame=it)) } }
+                item { FrameChoices(draft.frame, !busy) { viewModel.edit(draft.copy(frame = it)) } }
+                item { PresetChoices("Profile banner", appearancePreset(draft.bannerId) ?: if (draft.bannerId.isEmpty()) "none" else "custom", !busy, includeNone = true) { viewModel.edit(draft.copy(bannerId = if (it == "none") "" else "preset:$it", bannerUrl = null)) } }
                 item { ImageActions("Profile banner",busy,onUpload={uploadTarget="banner";picker.launch("image/*")},onGenerate={generationTarget="banner"},onClear={viewModel.edit(draft.copy(bannerId="",bannerUrl=null))}) }
+                item { PresetChoices("Profile background", appearancePreset(draft.profileBackgroundId) ?: if (draft.profileBackgroundId.isEmpty()) "none" else "custom", !busy, includeNone = true) { viewModel.edit(draft.copy(profileBackgroundId = if (it == "none") "" else "preset:$it", profileBackgroundUrl = null)) } }
                 item { ImageActions("Profile background",busy,onUpload={uploadTarget="profile";picker.launch("image/*")},onGenerate={generationTarget="profile"},onClear={viewModel.edit(draft.copy(profileBackgroundId="",profileBackgroundUrl=null))}) }
                 item { Text("Featured character",style=MaterialTheme.typography.titleMedium); Text("Choose a public character you created.",style=MaterialTheme.typography.bodySmall) }
                 item { LazyRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) { item { FilterChip(selected=draft.featuredCharacterId.isEmpty(),onClick={viewModel.edit(draft.copy(featuredCharacterId=""))},label={Text("None")},enabled=!busy) }; items(characters,key={it.id}) { c -> FilterChip(selected=draft.featuredCharacterId==c.id,onClick={viewModel.edit(draft.copy(featuredCharacterId=c.id))},label={Text(c.name)},enabled=!busy) } } }
@@ -118,10 +121,10 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
                 }
                 item { HorizontalDivider(); Text("App background",style=MaterialTheme.typography.titleLarge) }
                 item { Box(Modifier.fillMaxWidth().height(150.dp)) { AppearanceBackdrop(draft,Modifier.fillMaxSize()); Surface(modifier=Modifier.align(Alignment.Center),shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surface.copy(alpha=.9f)) { Text("A little more you",Modifier.padding(16.dp)) } } }
-                item { ChoiceRow("Choose a mood",listOf("default","aurora","midnight","rose","paper","image"),draft.background,!busy) { viewModel.edit(draft.copy(background=it)) } }
+                item { PresetChoices("Choose a background", draft.background, !busy) { viewModel.edit(draft.copy(background = it)) } }
                 item { ImageActions("Custom background",busy,onUpload={uploadTarget="background";picker.launch("image/*")},onGenerate={generationTarget="background"},onClear={viewModel.edit(draft.copy(background="default",backgroundId="",backgroundUrl=null))}) }
                 item { HorizontalDivider(); Text("App icon",style=MaterialTheme.typography.titleLarge) }
-                item { ChoiceRow("Launcher icon",listOf("default","midnight","rose","mint","sunset"),draft.icon,!busy) { viewModel.edit(draft.copy(icon=it)) } }
+                item { IconChoices(draft.icon, !busy) { viewModel.edit(draft.copy(icon = it)) } }
                 item { Text("Preset icons replace your app icon. An uploaded or generated image creates a custom home screen shortcut, which Android lets you confirm.",style=MaterialTheme.typography.bodySmall) }
                 item { ImageActions("Custom shortcut icon",busy,onUpload={uploadTarget="icon";picker.launch("image/*")},onGenerate={generationTarget="icon"}) }
                 item { Button(onClick={viewModel.save(context)},enabled=!busy,modifier=Modifier.fillMaxWidth()) { Text("Save appearance") } }
@@ -176,6 +179,65 @@ private fun ImageActions(
                 TextButton(onClick = clear, enabled = !busy) {
                     Text("Remove")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PresetChoices(title: String, selected: String, enabled: Boolean, includeNone: Boolean = false, onChoose: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items((if (includeNone) listOf("none") else emptyList()) + appearancePresets) { key ->
+                PresetTile(key, selected == key, enabled, { onChoose(key) }) {
+                    if (key != "none") PresetArtwork(key, Modifier.fillMaxSize())
+                    else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("None", style = MaterialTheme.typography.labelMedium) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetTile(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit, width: androidx.compose.ui.unit.Dp = 112.dp, content: @Composable BoxScope.() -> Unit) {
+    Column(Modifier.width(width), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Surface(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = androidx.compose.foundation.BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant)) {
+            Box(Modifier.fillMaxWidth().height(70.dp), contentAlignment = Alignment.Center, content = content)
+        }
+        Text(label.replaceFirstChar(Char::uppercase), style = MaterialTheme.typography.labelSmall, color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+internal fun FrameChoices(selected: String, enabled: Boolean, onChoose: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Profile frame", style = MaterialTheme.typography.titleSmall)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("none", "halo", "orbit", "laurel", "prism")) { key ->
+                PresetTile(key, key == selected, enabled, { onChoose(key) }, width = 74.dp) {
+                    com.example.aichat.core.design.CircleAvatar("M", null, Modifier.size(42.dp))
+                    ProfileFrame(key, Modifier.size(60.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun IconChoices(selected: String, enabled: Boolean, onChoose: (String) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(listOf("default", "midnight", "rose", "mint", "sunset")) { key ->
+            PresetTile(key, key == selected, enabled, { onChoose(key) }, width = 74.dp) {
+                val drawable = when (key) {
+                    "midnight" -> com.example.aichat.R.drawable.ic_launcher_midnight
+                    "rose" -> com.example.aichat.R.drawable.ic_launcher_rose
+                    "mint" -> com.example.aichat.R.drawable.ic_launcher_mint
+                    "sunset" -> com.example.aichat.R.drawable.ic_launcher_sunset
+                    else -> com.example.aichat.R.drawable.ic_launcher_default
+                }
+                androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(drawable), "$key Meek icon", Modifier.fillMaxSize())
             }
         }
     }

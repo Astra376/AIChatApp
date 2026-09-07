@@ -62,6 +62,13 @@ class SettingsViewModel @Inject constructor(
     fun signOut() { viewModelScope.launch { chatRepository.cancelAllOperations(); groupRepository.cancelAllOperations(); authRepository.signOut() } }
 }
 
+private enum class SettingsCategory(val title: String, val detail: String, val icon: AppIconGlyph) {
+    APPEARANCE("Appearance", "Theme, profile, backgrounds and app icon", AppIcons.edit),
+    CHATS("Chats & voices", "Streaming feedback, personas and voices", AppIcons.chats),
+    NOTIFICATIONS("Notifications", "Phone, email and activity preferences", AppIcons.activity),
+    ACCOUNT("Account", "Subscription, app version and sign out", AppIcons.profile)
+}
+
 @Composable
 fun SettingsRoute(
     paddingValues: PaddingValues,
@@ -69,53 +76,78 @@ fun SettingsRoute(
     onOpenVoices: () -> Unit = {},
     onOpenAppearance: () -> Unit = {},
     onOpenPersonas: () -> Unit = {},
+    onOpenSubscription: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val appearance = com.example.aichat.feature.customization.LocalAppearance.current
+    var category by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<SettingsCategory?>(null) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) { viewModel.events.collect { snackbar.showSnackbar(it, withDismissAction = true) } }
+    androidx.activity.compose.BackHandler(category != null) { category = null }
     ScreenBackgroundBox(snackbarHostState = snackbar) {
-        LazyColumn(
-            modifier = Modifier.pageContentFrame(paddingValues = paddingValues, imeAware = true),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item { Row(verticalAlignment = Alignment.CenterVertically) {
-                AppBackButton(onClick = onBack)
-                Text("Settings", modifier = Modifier.padding(start = 8.dp), style = MaterialTheme.typography.titleLarge)
-            } }
-            item { Text("Appearance", style = MaterialTheme.typography.titleMedium) }
-            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(selected = state.themeMode == mode, onClick = { viewModel.setTheme(mode) }, label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) })
+        Column(Modifier.pageContentFrame(paddingValues = paddingValues)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AppBackButton(onClick = { if (category == null) onBack() else category = null })
+                Text(category?.title ?: "Settings", style = MaterialTheme.typography.titleLarge)
+            }
+            key(category) {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(top = 10.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when (category) {
+                        null -> items(SettingsCategory.entries.size) { index ->
+                            val item = SettingsCategory.entries[index]
+                            SettingLink(item.title, item.detail, item.icon) { category = item }
+                        }
+                        SettingsCategory.APPEARANCE -> {
+                            item { Text("Color theme", style = MaterialTheme.typography.titleSmall) }
+                            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ThemeMode.entries.forEach { mode -> FilterChip(selected = state.themeMode == mode, onClick = { viewModel.setTheme(mode) }, label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) }) }
+                            } }
+                            item { SettingLink("Your Meek", "Profile styles, backgrounds, frames and icons", AppIcons.edit, onOpenAppearance) }
+                        }
+                        SettingsCategory.CHATS -> {
+                            item { SettingSwitch("Streaming vibration", "Tactile feedback as characters appear", state.streamingHaptics, onChanged = viewModel::setHaptics) }
+                            item { SettingLink("Personas", "Manage the identities you use in chats", AppIcons.profile, onOpenPersonas) }
+                            item { SettingLink("Voices", "Listen, choose or create a voice", AppIcons.chats, onOpenVoices) }
+                        }
+                        SettingsCategory.NOTIFICATIONS -> {
+                            item { Text("Delivery", style = MaterialTheme.typography.titleSmall) }
+                            item { SettingSwitch("Phone notifications", "Messages and activity on this phone", state.notifications.pushEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(pushEnabled = it)) } }
+                            item { SettingSwitch("Email notifications", "Updates sent to your account email", state.notifications.emailEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(emailEnabled = it)) } }
+                            item { Text("Activity", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp)) }
+                            item { SettingSwitch("Character messages", "Let characters continue your conversations", state.notifications.chatMessagesEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(chatMessagesEnabled = it)) } }
+                            item { SettingSwitch("New followers", "Busy periods are grouped together", state.notifications.followersEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(followersEnabled = it)) } }
+                            item { SettingSwitch("New characters", "Updates from creators and characters you may like", state.notifications.characterUpdatesEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(characterUpdatesEnabled = it)) } }
+                        }
+                        SettingsCategory.ACCOUNT -> {
+                            item { SettingLink("Subscription", if (appearance.ultra) "Ultra active · Manage or change test access" else "Meek Standard · View plans and test access", AppIcons.sparkle, onOpenSubscription) }
+                            item { Text("Meek ${com.example.aichat.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp)) }
+                            item { SecondaryButton("Log out", modifier = Modifier.fillMaxWidth(), onClick = viewModel::signOut) }
+                        }
+                    }
                 }
-            } }
-            item { SecondaryButton("Customize appearance · Ultra", modifier = Modifier.fillMaxWidth(), onClick = onOpenAppearance) }
-            item { SecondaryButton("Personas", modifier = Modifier.fillMaxWidth(), onClick = onOpenPersonas) }
-            item { SettingSwitch("Streaming vibration", "Light feedback as a reply arrives", state.streamingHaptics, onChanged = viewModel::setHaptics) }
-            item { Text("Notifications", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
-            item { SettingSwitch("Phone notifications", "Messages and activity on this phone", state.notifications.pushEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(pushEnabled = it)) } }
-            item { SettingSwitch("Email notifications", "Updates sent to your account email", state.notifications.emailEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(emailEnabled = it)) } }
-            item { SettingSwitch("Character messages", "Let characters continue your conversations", state.notifications.chatMessagesEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(chatMessagesEnabled = it)) } }
-            item { SettingSwitch("New followers", "Individual updates with busy periods grouped", state.notifications.followersEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(followersEnabled = it)) } }
-            item { SettingSwitch("New characters", "Updates from creators and characters you may like", state.notifications.characterUpdatesEnabled, !state.isSaving) { viewModel.setNotifications(state.notifications.copy(characterUpdatesEnabled = it)) } }
-            item { SecondaryButton("Voices", modifier = Modifier.fillMaxWidth(), onClick = onOpenVoices) }
-            item { Text("Meek ${com.example.aichat.BuildConfig.VERSION_NAME} · ${com.example.aichat.BuildConfig.BUILD_SHA}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            item { SecondaryButton("Log Out", modifier = Modifier.fillMaxWidth(), onClick = viewModel::signOut) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingLink(title: String, detail: String, icon: AppIconGlyph, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AppIcon(icon, null, size = 22.dp)
+            Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.titleSmall); Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
 private fun SettingSwitch(title: String, detail: String, checked: Boolean, enabled: Boolean = true, onChanged: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().appOutlineSurface(RoundedCornerShape(18.dp))
-            .clickable(enabled = enabled) { onChanged(!checked) }.padding(horizontal = 14.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Surface(onClick = { onChanged(!checked) }, enabled = enabled, shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f)) { Text(title, style = MaterialTheme.typography.bodyLarge); Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
         }
-        Switch(checked = checked, onCheckedChange = onChanged, enabled = enabled)
     }
 }

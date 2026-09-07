@@ -538,7 +538,7 @@ private fun CharacterCreateStepContent(
         CharacterCreateStep.PSYCHOLOGY -> Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             StepTitle("Build a life")
             Text("These are starting points. Memory, emotions and personality develop naturally through each story.", style=MaterialTheme.typography.bodyMedium)
-            CharacterPsychologyEditor(state.draft.psychologyDefaults, !state.isSaving, state.isUltra, onUpgradeUltra, onPsychologyChanged)
+            CharacterPsychologyEditor(state.draft.psychologyDefaults, !state.isSaving, com.example.aichat.feature.customization.LocalAppearance.current.ultra, onUpgradeUltra, onPsychologyChanged)
         }
         CharacterCreateStep.DEFINITION -> DefinitionStep(
             value = state.draft.characterDefinition,

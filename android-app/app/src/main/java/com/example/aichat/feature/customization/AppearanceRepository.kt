@@ -22,6 +22,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import coil.imageLoader
 
 @Serializable
 data class AppearanceDto(
@@ -54,14 +55,46 @@ interface AppearanceApi {
 }
 @Singleton
 class AppearanceRepository @Inject constructor(retrofit: Retrofit, client: OkHttpClient, @ApplicationContext private val context: Context) {
-    private val api = retrofit.newBuilder().client(client.newBuilder().readTimeout(170,TimeUnit.SECONDS).callTimeout(175,TimeUnit.SECONDS).build()).build().create(AppearanceApi::class.java)
+    private val api = retrofit.create(AppearanceApi::class.java)
+    private val imageApi = retrofit.newBuilder().client(client.newBuilder().readTimeout(170,TimeUnit.SECONDS).callTimeout(175,TimeUnit.SECONDS).build()).build().create(AppearanceApi::class.java)
+    private val cache = context.getSharedPreferences("account-appearance", Context.MODE_PRIVATE)
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val state = MutableStateFlow(AppearanceDto())
     val preferences = state.asStateFlow()
+    private val readyState = MutableStateFlow(false)
+    val ready = readyState.asStateFlow()
+    private var accountId: String? = null
     private var sessionRevision = 0
-    suspend fun refresh() { val revision=sessionRevision; val result=api.get(); if(revision==sessionRevision) { state.value=result; runCatching { LauncherAppearance.select(context,result.icon) } } }
-    fun reset() { sessionRevision++; state.value=AppearanceDto(); runCatching { LauncherAppearance.select(context,"default") } }
-    suspend fun save(value: AppearanceDto) { val revision=sessionRevision; val result=api.update(value.patch()); if(revision==sessionRevision) state.value=result }
-    suspend fun showcase(userId: String) = api.showcase(userId)
+    private val showcases = java.util.concurrent.ConcurrentHashMap<String, ShowcaseDto>()
+    suspend fun activate(userId: String) {
+        if (accountId == userId && readyState.value) return
+        sessionRevision++
+        accountId = userId
+        readyState.value = false
+        val revision = sessionRevision
+        val cached = withContext(Dispatchers.IO) { cache.getString(userId, null)?.let { runCatching { json.decodeFromString<AppearanceDto>(it) }.getOrNull() } }
+        if (revision != sessionRevision) return
+        state.value = cached ?: AppearanceDto()
+        readyState.value = cached != null
+        try { refresh() } finally { if (revision == sessionRevision) readyState.value = true }
+    }
+    private fun publish(value: AppearanceDto) {
+        state.value = value
+        accountId?.let { cache.edit().putString(it, json.encodeToString(AppearanceDto.serializer(), value)).apply() }
+        listOf(value.bannerId to value.bannerUrl, value.profileBackgroundId to value.profileBackgroundUrl, value.backgroundId to value.backgroundUrl).forEach { (id, url) ->
+            if (url != null) context.imageLoader.enqueue(coil.request.ImageRequest.Builder(context).data(url).memoryCacheKey("appearance:$id").diskCacheKey("appearance:$id").build())
+        }
+    }
+    fun updateUltraAccess(active: Boolean) {
+        if (active == state.value.ultra) return
+        sessionRevision++ // Discard appearance requests started before the entitlement changed.
+        publish(if (active) state.value.copy(ultra = true) else AppearanceDto())
+    }
+    suspend fun refresh() { val revision=sessionRevision; val result=api.get(); if(revision==sessionRevision) { publish(result); runCatching { LauncherAppearance.select(context,result.icon) } } }
+    fun reset() { sessionRevision++; accountId=null; readyState.value=false; state.value=AppearanceDto(); runCatching { LauncherAppearance.select(context,"default") } }
+    suspend fun save(value: AppearanceDto) { val revision=sessionRevision; val result=api.update(value.patch()); if(revision==sessionRevision) publish(result) }
+    fun cachedShowcase(userId: String) = showcases[userId]
+    suspend fun showcase(userId: String) = api.showcase(userId).also { showcases[userId] = it }
     suspend fun upload(kind: String, uri: Uri): AppearanceAsset = withContext(Dispatchers.IO) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
             val out = java.io.ByteArrayOutputStream()
@@ -70,7 +103,7 @@ class AppearanceRepository @Inject constructor(retrofit: Retrofit, client: OkHtt
             out.toByteArray()
          } ?: error("Image could not be opened.")
         require(bytes.size <= 10_000_000) { "Choose an image under 10 MB." }
-        api.upload(kind.toRequestBody("text/plain".toMediaType()), MultipartBody.Part.createFormData("image","image",bytes.toRequestBody("application/octet-stream".toMediaType())))
+        imageApi.upload(kind.toRequestBody("text/plain".toMediaType()), MultipartBody.Part.createFormData("image","image",bytes.toRequestBody("application/octet-stream".toMediaType())))
     }
-    suspend fun generate(kind: String, prompt: String, requestKey: String = UUID.randomUUID().toString()) = api.generate(GenerateAppearanceRequest(kind,prompt,requestKey))
+    suspend fun generate(kind: String, prompt: String, requestKey: String = UUID.randomUUID().toString()) = imageApi.generate(GenerateAppearanceRequest(kind,prompt,requestKey))
 }

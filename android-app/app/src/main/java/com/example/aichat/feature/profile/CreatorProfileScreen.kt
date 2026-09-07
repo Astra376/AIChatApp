@@ -84,7 +84,7 @@ class CreatorProfileViewModel @Inject constructor(
 ) : ViewModel() {
     private val userId: String = checkNotNull(savedStateHandle["userId"])
     private val isOwnProfile = userId == authRepository.sessionState.value.profile?.userId
-    private val _uiState = MutableStateFlow(CreatorProfileUiState(isOwnProfile = isOwnProfile))
+    private val _uiState = MutableStateFlow(CreatorProfileUiState(isOwnProfile = isOwnProfile, showcase = appearanceRepository.cachedShowcase(userId)))
     private var refreshJob: Job? = null
     val uiState: StateFlow<CreatorProfileUiState> = _uiState.asStateFlow()
     private val _events = MutableSharedFlow<String>()
@@ -98,7 +98,7 @@ class CreatorProfileViewModel @Inject constructor(
         if (refreshJob?.isActive == true) return
         _uiState.value = _uiState.value.copy(isLoading = true, isFollowLoading = true)
         refreshJob = viewModelScope.launch {
-            launch {
+            val showcaseRequest = async {
                 try { _uiState.value = _uiState.value.copy(showcase = appearanceRepository.showcase(userId)) }
                 catch(error: Exception) { if(error is CancellationException) throw error }
             }
@@ -117,6 +117,7 @@ class CreatorProfileViewModel @Inject constructor(
                 val charactersRequest = async { runCatching { repository.getCharacters(userId) } }
                 val profileResult = profileRequest.await()
                 val charactersResult = charactersRequest.await()
+                showcaseRequest.await()
                 _uiState.value = _uiState.value.copy(
                     profile = profileResult.getOrNull() ?: _uiState.value.profile,
                     characters = charactersResult.getOrNull()?.items ?: _uiState.value.characters,

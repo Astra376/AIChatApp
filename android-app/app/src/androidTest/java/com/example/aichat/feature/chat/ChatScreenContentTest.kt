@@ -174,6 +174,27 @@ class ChatScreenContentTest {
     }
 
     @Test
+    fun completedResponse_keepsRevealingUntilEveryCharacterIsVisible() {
+        composeRule.mainClock.autoAdvance = false
+        val finalText = "Streaming reply continues after the network has finished."
+        val chatState = mutableStateOf(ChatUiState(conversation = conversationDetail(listOf(message(0, "Question"))), activeStream = stream("").copy(assistantMessageId = "message-1")))
+        composeRule.setContent { TestChat(chatState.value) }
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.runOnIdle { chatState.value = chatState.value.copy(activeStream = chatState.value.activeStream!!.copy(text = finalText)) }
+        composeRule.mainClock.advanceTimeBy(160)
+        val before = displayedTextStartingWith("Stream")
+        composeRule.runOnIdle {
+            chatState.value = chatState.value.copy(conversation = conversationDetail(listOf(message(0, "Question"), message(1, finalText))), activeStream = chatState.value.activeStream!!.copy(status = ActiveStreamStatus.COMPLETED))
+        }
+        composeRule.mainClock.advanceTimeBy(64)
+        val after = displayedTextStartingWith("Stream")
+        assertTrue("Completion must not flush the pending character queue", after.length < finalText.length)
+        assertTrue("The reveal should keep advancing", after.length > before.length)
+        composeRule.mainClock.advanceTimeBy(finalText.length * 20L)
+        composeRule.onNodeWithText(finalText).assertIsDisplayed()
+    }
+
+    @Test
     fun continuousTokenUpdates_doNotRestartAndStarveReveal() {
         composeRule.mainClock.autoAdvance = false
         val chatState = mutableStateOf(ChatUiState(

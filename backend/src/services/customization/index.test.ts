@@ -22,6 +22,15 @@ function setup() {
 }
 beforeEach(()=>{vi.mocked(hasUltra).mockResolvedValue(true);vi.mocked(requireUltra).mockResolvedValue(undefined)});
 describe("appearance access and profile publishing",()=>{
+  it("saves bundled presets without uploads and exposes them on the public profile",async()=>{
+    const {db,context}=setup();try{
+      const result=await saveAppearance(context(),{bannerId:"preset:aurora",profileBackgroundId:"preset:midnight",background:"rose"});
+      expect(result).toMatchObject({bannerId:"preset:aurora",profileBackgroundId:"preset:midnight",bannerUrl:null,profileBackgroundUrl:null});
+      expect((await getShowcase(context("other"),"owner")).appearance.bannerId).toBe("preset:aurora");
+      expect(db.prepare("SELECT COUNT(*) AS n FROM appearance_assets").get()?.n).toBe(0);
+      await expect(saveAppearance(context(),{bannerId:"preset:not-a-preset"})).rejects.toMatchObject({code:"INVALID_APPEARANCE"});
+    }finally{db.close()}
+  });
   it("rejects invalid fields, choices, and widgets instead of retaining arbitrary JSON",()=>{
     expect(()=>validateAppearance({profileFont:"javascript:bad"})).toThrow();
     expect(()=>validateAppearance({ultra:true})).toThrow();

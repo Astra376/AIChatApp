@@ -64,7 +64,9 @@ interface UltraApi {
     @POST("v1/ultra/checkout") suspend fun checkout(@Body request: CheckoutRequest): BillingUrl
     @POST("v1/ultra/portal") suspend fun portal(): BillingUrl
 }
-@HiltViewModel class UltraViewModel @Inject constructor(retrofit: Retrofit) : ViewModel() {
+@HiltViewModel class UltraViewModel @Inject constructor(retrofit: Retrofit,
+    private val appearance: com.example.aichat.feature.customization.AppearanceRepository
+) : ViewModel() {
     data class State(val info: UltraDto? = null, val loading: Boolean = true, val busy: Boolean = false, val error: String? = null, val url: String? = null)
     private val api = retrofit.create(UltraApi::class.java)
     private val _state = MutableStateFlow(State())
@@ -75,7 +77,7 @@ interface UltraApi {
     fun refresh() {
         if (_state.value.busy || refreshJob?.isActive == true) return
         refreshJob = viewModelScope.launch {
-            try { _state.value = _state.value.copy(info = api.status(), loading = false, error = null) }
+            try { val info = api.status(); appearance.updateUltraAccess(info.active); _state.value = _state.value.copy(info = info, loading = false, error = null) }
             catch (error: CancellationException) { throw error }
             catch (error: Throwable) { _state.value = _state.value.copy(loading = false, error = error.userFacingMessage("Could not load Ultra.")) }
         }
@@ -85,7 +87,12 @@ interface UltraApi {
         refreshJob?.cancel()
         _state.value = _state.value.copy(busy = true, error = null)
         viewModelScope.launch {
-            try { _state.value = _state.value.copy(info = api.preview(PreviewRequest(enabled, cadence)), busy = false, loading = false) }
+            try {
+                val info = api.preview(PreviewRequest(enabled, cadence))
+                appearance.updateUltraAccess(info.active)
+                _state.value = _state.value.copy(info = info, busy = false, loading = false)
+                runCatching { appearance.refresh() }
+            }
             catch (error: CancellationException) { throw error }
             catch (error: Throwable) { _state.value = _state.value.copy(busy = false, error = error.userFacingMessage("Could not change the test subscription.")) }
         }
@@ -239,7 +246,7 @@ internal fun UltraScreenContent(
                     Text("More imagination. More memory. More you.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
                 }
                 if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                if (plans.isNotEmpty()) item {
+                if (!active && plans.isNotEmpty()) item {
                     BoxWithConstraints {
                         val stack = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.25f
                         val ordered = plans.sortedBy { if (it.cadence == "annual") 0 else 1 }

@@ -117,13 +117,14 @@ fun AiChatApp(appViewModel: AppViewModel, notificationUri: Uri? = null, onNotifi
     val session by appViewModel.sessionState.collectAsStateWithLifecycle()
     val profile by appViewModel.profile.collectAsStateWithLifecycle()
     val appearance by appViewModel.appearance.preferences.collectAsStateWithLifecycle()
+    val appearanceReady by appViewModel.appearance.ready.collectAsStateWithLifecycle()
     val activeProfile = profile ?: session.profile
     val context = LocalContext.current
-    LaunchedEffect(session.isSignedIn, session.isLoading) {
+    LaunchedEffect(session.isSignedIn, session.isLoading, session.profile?.userId) {
         if (session.isLoading) return@LaunchedEffect
         if (session.isSignedIn) {
             com.example.aichat.feature.activity.NotificationWorker.schedule(context)
-            runCatching { appViewModel.appearance.refresh() }
+            runCatching { appViewModel.appearance.activate(session.profile?.userId.orEmpty()) }
         } else {
             com.example.aichat.feature.activity.NotificationWorker.cancel(context)
             appViewModel.appearance.reset()
@@ -132,8 +133,10 @@ fun AiChatApp(appViewModel: AppViewModel, notificationUri: Uri? = null, onNotifi
     when {
         session.isLoading -> LoadingScreen()
         !session.isSignedIn -> SignInRoute()
+        !appearanceReady -> LoadingScreen()
         else -> key(activeProfile?.userId) {
-            CompositionLocalProvider(LocalAppBackdrop provides { AppearanceBackdrop(appearance, Modifier.fillMaxSize()) }) {
+            CompositionLocalProvider(com.example.aichat.feature.customization.LocalAppearance provides appearance,
+                LocalAppBackdrop provides { AppearanceBackdrop(appearance, Modifier.fillMaxSize()) }) {
                 MainShell(activeProfile?.userId.orEmpty(), activeProfile?.displayName.orEmpty(), activeProfile?.avatarUrl, appViewModel, notificationUri, onNotificationConsumed)
             }
         }
@@ -270,7 +273,7 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
         }
         composable("settings") { entry ->
             SettingsRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenVoices = { nav.openFrom(entry, "voices") },
-                onOpenAppearance = { nav.openFrom(entry, "appearance") }, onOpenPersonas = { nav.openFrom(entry, "personas") })
+                onOpenAppearance = { nav.openFrom(entry, "appearance") }, onOpenPersonas = { nav.openFrom(entry, "personas") }, onOpenSubscription = { nav.openFrom(entry, "ultra") })
         }
         composable("activity") { entry ->
             ActivityRoute(
@@ -312,6 +315,7 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (String) -> Unit) {
+    val isUltra = com.example.aichat.feature.customization.LocalAppearance.current.ultra
     val tabs = remember { bottomDestinations.filter { it != MainDestination.Studio && it != MainDestination.Ultra } }
     val pager = rememberPagerState { tabs.size }
     val scope = rememberCoroutineScope()
@@ -343,7 +347,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                 windowInsets = WindowInsets.navigationBars,
                 modifier = Modifier.height(AppChrome.bottomBarHeight + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
             ) {
-                bottomDestinations.forEach { destination ->
+                bottomDestinations.filter { !isUltra || it != MainDestination.Ultra }.forEach { destination ->
                     val selected = current == destination
                     NavigationBarItem(
                         selected = selected, alwaysShowLabel = false,

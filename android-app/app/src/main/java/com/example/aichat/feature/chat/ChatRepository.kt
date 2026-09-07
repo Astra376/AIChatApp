@@ -215,6 +215,12 @@ class ChatRepository @Inject constructor(
         return activeStreams.map { streams -> streams[conversationId] }
     }
 
+    fun finishDisplaying(conversationId: String, draftKey: String) {
+        if (currentActiveStream(conversationId)?.status == ActiveStreamStatus.COMPLETED) {
+            clearActiveStream(conversationId, draftKey)
+        }
+    }
+
     suspend fun refreshConversation(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
         captureResult {
             val revision = transcriptRevisions[conversationId] ?: 0L
@@ -671,7 +677,7 @@ class ChatRepository @Inject constructor(
             if (!terminalReceived && acceptedRunId != null) {
                 finishInterruptedRun(conversationId, draftKey, acceptedRunId!!)
             }
-            if (!stopped) {
+            if (!stopped && currentActiveStream(conversationId)?.status != ActiveStreamStatus.COMPLETED) {
                 clearActiveStream(conversationId, draftKey)
             }
         }
@@ -791,7 +797,7 @@ class ChatRepository @Inject constructor(
             if (!terminalReceived && acceptedRunId != null) {
                 finishInterruptedRun(conversationId, draftKey, acceptedRunId!!)
             }
-            if (!stopped) {
+            if (!stopped && currentActiveStream(conversationId)?.status != ActiveStreamStatus.COMPLETED) {
                 clearActiveStream(conversationId, draftKey)
             }
         }
@@ -906,7 +912,7 @@ class ChatRepository @Inject constructor(
             if (!terminalReceived && acceptedRunId != null) {
                 finishInterruptedRun(conversationId, draftKey, acceptedRunId!!)
             }
-            if (!stopped) {
+            if (!stopped && currentActiveStream(conversationId)?.status != ActiveStreamStatus.COMPLETED) {
                 clearActiveStream(conversationId, draftKey)
             }
         }
@@ -938,7 +944,7 @@ class ChatRepository @Inject constructor(
             upsertMessageFromDto(event.assistantMessage, sendState = MessageSendState.SENT)
             updateConversationMetadataFromSummary(conversationId, event.conversationSummary, event.conversationVersion)
         }
-        clearActiveStream(conversationId, draftKey)
+        updateActiveStream(conversationId, draftKey) { it.copy(text = event.assistantMessage.content, status = ActiveStreamStatus.COMPLETED) }
     }
 
     private suspend fun applyCompletedRegenerate(
@@ -965,7 +971,7 @@ class ChatRepository @Inject constructor(
             )
             updateConversationMetadataFromSummary(conversationId, event.conversationSummary, event.conversationVersion)
         }
-        clearActiveStream(conversationId, draftKey)
+        updateActiveStream(conversationId, draftKey) { it.copy(text = event.regeneration.content, status = ActiveStreamStatus.COMPLETED) }
     }
 
     private suspend fun applyRemoteConversationDetail(detail: ConversationDetailDto) {
@@ -1173,7 +1179,7 @@ class ChatRepository @Inject constructor(
                 throw ChatRuleViolation("Wait for the current reply to finish before changing the transcript.")
             }
 
-            ActiveStreamStatus.STOPPED -> {
+            ActiveStreamStatus.STOPPED, ActiveStreamStatus.COMPLETED -> {
                 clearActiveStream(conversationId, activeStream.draftKey)
             }
         }

@@ -9,7 +9,8 @@ enum class ActiveStreamMode {
 enum class ActiveStreamStatus {
     STREAMING,
     STOPPING,
-    STOPPED
+    STOPPED,
+    COMPLETED
 }
 
 data class ActiveAssistantStream(

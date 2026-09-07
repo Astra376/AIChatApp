@@ -19,6 +19,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -187,50 +195,47 @@ internal fun CharacterMemoryScreen(
     onPersonalityChanged: (CharacterPersonalityDto) -> Unit = {},
     onPsychologyChanged: (CharacterPsychologyDto) -> Unit = {}
 ) {
+    var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var memoryTab by rememberSaveable { mutableStateOf(0) }
+    val tabs = listOf("Memory", "Emotions", "Personality", "Mind & life", "Scene")
     ScreenBackgroundBox(snackbarHostState = snackbarHostState) {
-        Column(Modifier.pageContentFrame(paddingValues = paddingValues, imeAware = true),
-            verticalArrangement = Arrangement.spacedBy(AppChrome.sectionSpacing)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppChrome.compactControlGap),
-                verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.pageContentFrame(paddingValues = paddingValues, imeAware = true), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 AppBackButton(onClick = onBack)
                 Text("Character psychology", style = MaterialTheme.typography.titleLarge)
             }
             if (state.isLoading) {
                 CharacterMemoryPlaceholder()
             } else {
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(AppChrome.sectionSpacing)) {
-                    if (state.hasServerDetails) {
-                        Text(if (state.tier == "ultra") "Ultra memory" else "Standard memory",
-                            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        Text(if (state.loadFailed) "Memory details couldn't be loaded." else "Loading memory details…",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (state.loadFailed) SecondaryButton(text = "Retry", onClick = onRetry)
-                    if (state.hasServerDetails) {
-                        SceneMemory(state.scene)
-                        state.emotion?.let { emotion -> PsychologySection("Emotions & momentum") { EmotionEditor(emotion,!state.isSaving,onEmotionChanged) } }
-                        state.personality?.let { personality -> PsychologySection("Personality") { PersonalityEditor(personality,!state.isSaving,onPersonalityChanged) } }
-                        state.psychology?.let { psychology -> PsychologySection("Mind & life") { MindEditor(psychology,!state.isSaving,onPsychologyChanged) } }
-                    }
-                    PsychologySection("Memory", initiallyExpanded = true) {
-                    MemoryEditor("Short-term memory", "What is happening now: the current scene, goals and recent developments.",
-                        state.shortTerm, state.limits.shortTerm, 5, "Current scene and recent developments",
-                        state.hasServerDetails && !state.isSaving, onShortTermChanged)
-                    MemoryEditor("Mid-term memory", "The developing story: recent arcs, promises and unresolved threads.",
-                        state.midTerm, state.limits.midTerm, 6, "Story arcs and unresolved threads",
-                        state.hasServerDetails && !state.isSaving, onMidTermChanged)
-                    MemoryEditor("Long-term memory", "Lasting facts, important events and relationships the character should remember.",
-                        state.longTerm, state.limits.longTerm, 8, "Important events and lasting details",
-                        state.hasServerDetails && !state.isSaving, onLongTermChanged)
-                    }
-                    if (!state.withinLimits && state.hasServerDetails) Text(
-                        "Your saved memory is intact. Shorten the fields over their limit before saving.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 0.dp, containerColor = Color.Transparent) {
+                    tabs.forEachIndexed { index, title -> Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(title) }) }
                 }
-                PrimaryButton(text = if (state.isSaving) "Saving…" else "Save changes", modifier = Modifier.fillMaxWidth(),
-                    enabled = state.hasChanges && state.withinLimits && state.hasServerDetails && !state.isSaving, onClick = onSave)
+                key(selectedTab) {
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (!state.hasServerDetails) Text(if (state.loadFailed) "Details couldn't be loaded." else "Loading details…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (state.loadFailed) SecondaryButton(text = "Retry", onClick = onRetry)
+                        val enabled = state.hasServerDetails && !state.isSaving
+                        when (selectedTab) {
+                            0 -> {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf("Short term", "Mid term", "Long term").forEachIndexed { index, title -> FilterChip(selected = memoryTab == index, onClick = { memoryTab = index }, label = { Text(title) }) }
+                                }
+                                when (memoryTab) {
+                                    0 -> MemoryEditor("Short-term memory", "The current scene, goals and recent developments.", state.shortTerm, state.limits.shortTerm, 8, "Current scene and recent developments", enabled, onShortTermChanged)
+                                    1 -> MemoryEditor("Mid-term memory", "Developing story arcs, promises and unresolved threads.", state.midTerm, state.limits.midTerm, 8, "Story arcs and unresolved threads", enabled, onMidTermChanged)
+                                    else -> MemoryEditor("Long-term memory", "Lasting facts, important events and relationships.", state.longTerm, state.limits.longTerm, 8, "Important events and lasting details", enabled, onLongTermChanged)
+                                }
+                                Text(if (state.tier == "ultra") "Ultra memory" else "Standard memory", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            1 -> state.emotion?.let { EmotionEditor(it, enabled, onEmotionChanged) }
+                            2 -> state.personality?.let { PersonalityEditor(it, enabled, onPersonalityChanged) }
+                            3 -> state.psychology?.let { MindEditor(it, enabled, onPsychologyChanged) }
+                            4 -> SceneMemory(state.scene)
+                        }
+                        if (!state.withinLimits && state.hasServerDetails) Text("Shorten the memory fields over their limit before saving.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                PrimaryButton(text = if (state.isSaving) "Saving…" else "Save changes", modifier = Modifier.fillMaxWidth(), enabled = state.hasChanges && state.withinLimits && state.hasServerDetails && !state.isSaving, onClick = onSave)
             }
         }
     }
@@ -238,8 +243,8 @@ internal fun CharacterMemoryScreen(
 
 @Composable
 private fun SceneMemory(scene: MemorySceneDto) {
-    if (scene.summary.isBlank() && scene.location.isNullOrBlank() && scene.fictionalTime.isNullOrBlank() && scene.timeline.isEmpty()) return
-    PsychologySection("Scene & story time") {
+    if (scene.summary.isBlank() && scene.location.isNullOrBlank() && scene.fictionalTime.isNullOrBlank() && scene.timeline.isEmpty()) { Text("Scene details will appear as your conversation develops.", style = MaterialTheme.typography.bodyMedium); return }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (scene.summary.isNotBlank()) Text(scene.summary, style = MaterialTheme.typography.bodyMedium)
         scene.location?.takeIf { it.isNotBlank() }?.let { Text("Location · $it", style = MaterialTheme.typography.bodySmall) }
         scene.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text("Story time · $it", style = MaterialTheme.typography.bodySmall) }
@@ -248,46 +253,6 @@ private fun SceneMemory(scene: MemorySceneDto) {
                 event.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Text(event.text, style = MaterialTheme.typography.bodyMedium)
             }
-        }
-    }
-}
-
-@Composable
-private fun EmotionMemory(emotion: CharacterEmotionDto) {
-    MemoryCard("Character state") {
-        if (emotion.mood.isNotBlank()) Text(emotion.mood, style = MaterialTheme.typography.titleMedium)
-        if (emotion.reason.isNotBlank()) Text(emotion.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        listOf("Trust" to emotion.trust, "Affection" to emotion.affection, "Stress" to emotion.stress,
-            "Energy" to emotion.energy, "Openness" to emotion.openness).forEach { (label, value) ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                LinearProgressIndicator(progress = { value.coerceIn(0, 100) / 100f }, modifier = Modifier.weight(1.4f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun PersonalityMemory(personality: CharacterPersonalityDto) {
-    MemoryCard("Personality") {
-        if (personality.description.isNotBlank()) Text(personality.description, style = MaterialTheme.typography.bodyMedium)
-        listOf("Warmth" to personality.warmth, "Confidence" to personality.confidence,
-            "Playfulness" to personality.playfulness, "Formality" to personality.formality,
-            "Assertiveness" to personality.assertiveness).forEach { (label, value) ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                LinearProgressIndicator(progress = { value.coerceIn(0, 100) / 100f }, modifier = Modifier.weight(1.4f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun MemoryCard(title: String, content: @Composable () -> Unit) {
-    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            content()
         }
     }
 }

@@ -74,21 +74,22 @@ internal val LocalChatFont = staticCompositionLocalOf<FontFamily?> { null }
     onRetryArtwork: () -> Unit = {}
 ) {
     val prefs by model.preferences.collectAsStateWithLifecycle()
+    val isUltra = com.example.aichat.feature.customization.LocalAppearance.current.ultra
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Chat preferences", style = MaterialTheme.typography.titleLarge)
             Text("Model", style = MaterialTheme.typography.titleMedium)
             listOf("auto" to "Automatic", "standard" to "Meek Standard", "ultra" to "Meek Ultra").forEach { (value, label) ->
                 PreferenceChoice(label, prefs.mode == value, !model.busy) {
-                    if (value == "ultra" && !prefs.ultra) { onDismiss(); onUpgrade() }
+                    if (value == "ultra" && !isUltra) { onDismiss(); onUpgrade() }
                     else model.update("mode", value)
                 }
             }
             Text("Automatic uses fast replies for everyday conversation and extra reasoning when needed.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Chat font", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             listOf("default" to "Default", "sans" to "Clean", "serif" to "Book", "mono" to "Typewriter", "rounded" to "Handwritten").forEach { (value, label) ->
-                PreferenceChoice(label + if (value != "default" && !prefs.ultra) " · Ultra" else "", prefs.chatFont == value, !model.busy) {
-                    if (value != "default" && !prefs.ultra) { onDismiss(); onUpgrade() }
+                PreferenceChoice(label + if (value != "default" && !isUltra) " · Ultra" else "", prefs.chatFont == value, !model.busy) {
+                    if (value != "default" && !isUltra) { onDismiss(); onUpgrade() }
                     else model.update("chatFont", value)
                 }
             }

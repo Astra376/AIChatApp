@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -162,6 +163,7 @@ class ChatViewModel @Inject constructor(
     private val personaIdentity: com.example.aichat.feature.persona.PersonaIdentityRepository
 ) : ViewModel() {
     private val conversationId: String = checkNotNull(savedStateHandle["conversationId"])
+    fun finishDisplaying(draftKey: String) = chatRepository.finishDisplaying(conversationId, draftKey)
     private val composerText = MutableStateFlow(savedStateHandle.get<String>("composerDraft").orEmpty())
     private val composerSavedState = savedStateHandle
     var editorText by mutableStateOf(composerText.value)
@@ -454,6 +456,7 @@ fun ChatRoute(
         onSend = viewModel::send,
         onContinue = viewModel::continueAssistant,
         onStop = viewModel::stopStreaming,
+        onStreamRevealed = viewModel::finishDisplaying,
         onRefreshChat = viewModel::refreshChat,
         onBackgroundLoadFailed = viewModel::repairBackground,
         onStartNewChat = { viewModel.startNewChat(onStartNewChat) },
@@ -564,6 +567,7 @@ internal fun ChatScreenContent(
     onSend: () -> Unit,
     onContinue: () -> Unit,
     onStop: () -> Unit = {},
+    onStreamRevealed: (String) -> Unit = {},
     onRefreshChat: () -> Unit = {},
     onBackgroundLoadFailed: (String) -> Unit = {},
     onStartNewChat: () -> Unit = {},
@@ -608,9 +612,14 @@ internal fun ChatScreenContent(
     val streamDisplayText = rememberTypedStreamText(
         streamKey = activeStream?.draftKey,
         sourceText = streamSourceText,
-        animate = activeStream?.status == ActiveStreamStatus.STREAMING,
+        animate = activeStream?.status == ActiveStreamStatus.STREAMING || activeStream?.status == ActiveStreamStatus.COMPLETED,
         hapticsEnabled = state.streamingHaptics
     )
+    LaunchedEffect(activeStream?.draftKey, activeStream?.status, streamDisplayText) {
+        if (activeStream?.status == ActiveStreamStatus.COMPLETED && streamDisplayText == activeStream.text) {
+            onStreamRevealed(activeStream.draftKey)
+        }
+    }
     val showSendDraft = activeStream?.mode != ActiveStreamMode.REGENERATE &&
         activeStream != null &&
         !activeStream.remoteOnly &&
@@ -1164,7 +1173,7 @@ private fun ChatHeader(
                         )
                     }
                 }
-                androidx.compose.material3.TextButton(onClick = onUpgradeUltra,
+                if (!com.example.aichat.feature.customization.LocalAppearance.current.ultra) androidx.compose.material3.TextButton(onClick = onUpgradeUltra,
                     contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Ultra") }
                 IconCircleButton(
                     enabled = !isLoading,
@@ -1221,12 +1230,9 @@ private fun MessageBubble(
     }
     val avatarName = if (isUser) currentUserName else characterName
     val avatarUrl = if (isUser) currentUserAvatarUrl else characterAvatarUrl
-    val variants = remember(message.content, message.regenerations, displayContent, showTypingIndicator, showGenerationPage) {
-        if (showTypingIndicator && !showGenerationPage) {
-            listOf(displayContent)
-        } else {
-            val generated = message.variantTexts()
-            if (!showGenerationPage && displayContent != message.visibleContent) listOf(displayContent) else generated
+    val variants = remember(message.content, message.regenerations, message.selectedRegenerationId, displayContent, showGenerationPage) {
+        message.variantTexts().toMutableList().apply {
+            if (!showGenerationPage) this[message.variantIndex()] = displayContent
         }
     }
     val currentIndex = if (variants.size == message.variantCount()) message.variantIndex() else 0
@@ -1311,7 +1317,7 @@ private fun VariantMessagePager(
     LaunchedEffect(showingGeneration) {
         if (showingGeneration && hasGenerationPage) {
             generationRequested = true
-            pagerState.scrollToPage(generationPage)
+            if (pagerState.currentPage != generationPage) pagerState.animateScrollToPage(generationPage, animationSpec = androidx.compose.animation.core.tween(150))
         }
     }
     LaunchedEffect(variantControlsEnabled, showingGeneration, variants.size) {
@@ -1320,7 +1326,7 @@ private fun VariantMessagePager(
             // An appended reply already occupies the former draft page. A
             // stopped/failed request without a saved reply returns to its source.
             if (pagerState.currentPage >= variants.size) {
-                pagerState.scrollToPage(currentIndex.coerceIn(variants.indices))
+                pagerState.animateScrollToPage(currentIndex.coerceIn(variants.indices), animationSpec = androidx.compose.animation.core.tween(150))
             }
             reportedPage = pagerState.currentPage
         }
@@ -1343,11 +1349,19 @@ private fun VariantMessagePager(
 
     HorizontalPager(
         state = pagerState,
-        modifier = modifier.fillMaxWidth().testTag("reply-variants"),
+        modifier = modifier.fillMaxWidth().animateContentSize(animationSpec = androidx.compose.animation.core.tween(140)).testTag("reply-variants"),
         userScrollEnabled = variantControlsEnabled,
         verticalAlignment = Alignment.Top
     ) { page ->
         val isGenerationPage = page == generationPage
+        if (isGenerationPage && !showingGeneration) {
+            Column(Modifier.fillMaxWidth().heightIn(min = 120.dp).padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                AppIcon(AppIcons.sparkle, null, size = 24.dp)
+                Text("Another reply", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                Text("Release to generate", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
         MessageVariantPage(
             modifier = Modifier.fillMaxWidth(),
             text = if (isGenerationPage) generationPageText else variants[page],
@@ -1363,15 +1377,16 @@ private fun VariantMessagePager(
             onLongPress = onLongPress,
             onPrevious = {
                 if (!pagerState.isScrollInProgress && pagerState.currentPage > 0) {
-                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1, animationSpec = androidx.compose.animation.core.tween(150)) }
                 }
             },
             onNext = {
                 if (!pagerState.isScrollInProgress && pagerState.currentPage < pageCount - 1) {
-                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                    scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1, animationSpec = androidx.compose.animation.core.tween(150)) }
                 }
             }
         )
+        }
     }
 }
 
@@ -1647,10 +1662,7 @@ internal fun rememberTypedStreamText(
             if (!latestAnimate || !target.startsWith(displayedText)) {
                 displayedText = target
             } else if (displayedText.length < target.length) {
-                // Catch up with provider bursts without building a long typing queue.
-                val count = ((target.length - displayedText.length) / 8).coerceIn(1, 8)
-                var end = (displayedText.length + count).coerceAtMost(target.length)
-                if (end < target.length && target[end - 1].isHighSurrogate()) end++
+                val end = Character.offsetByCodePoints(target, displayedText.length, 1)
                 displayedText = target.take(end)
                 if (latestHaptics && latestAnimate) {
                     view.performHapticFeedback(

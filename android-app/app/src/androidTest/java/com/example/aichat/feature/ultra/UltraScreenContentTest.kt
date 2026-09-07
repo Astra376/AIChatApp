@@ -38,6 +38,8 @@ class UltraScreenContentTest {
         assertEquals(buttonTop, compose.onNodeWithTag("ultra-purchase").fetchSemanticsNode().boundsInRoot.top, 1f)
         compose.onNodeWithTag("ultra-purchase").performClick()
         compose.onNodeWithText("Disable test Ultra").assertIsDisplayed()
+        compose.onNodeWithTag("ultra-plan-monthly").assertDoesNotExist()
+        compose.onNodeWithTag("ultra-plan-annual").assertDoesNotExist()
         compose.onNodeWithTag("ultra-content").performScrollToNode(hasTestTag("ultra-test-toggle"))
         compose.onNodeWithTag("ultra-test-toggle").performClick()
         compose.onNodeWithText("Mock purchase · Monthly").assertIsDisplayed()

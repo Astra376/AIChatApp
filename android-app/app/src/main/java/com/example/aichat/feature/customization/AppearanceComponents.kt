@@ -26,39 +26,76 @@ import com.example.aichat.core.ui.ProfileCountStat
 import kotlin.math.cos
 import kotlin.math.sin
 
+val LocalAppearance = androidx.compose.runtime.staticCompositionLocalOf { AppearanceDto() }
+
 fun profileFont(key: String): FontFamily = when(key) {
     "serif" -> FontFamily.Serif; "mono" -> FontFamily.Monospace; "rounded" -> FontFamily.Cursive
     "sans" -> FontFamily.SansSerif; else -> FontFamily.Default
 }
+val appearancePresets = listOf("default", "aurora", "midnight", "rose", "paper")
+fun appearancePreset(id: String): String? = id.removePrefix("preset:").takeIf { id.startsWith("preset:") && it in appearancePresets }
+
+/** Bundled vector treatments render immediately, without image requests. */
 @Composable
-fun AppearanceBackdrop(preferences: AppearanceDto,modifier: Modifier = Modifier) {
-    val base=MaterialTheme.colorScheme.background
-    Box(modifier) {
-        when(preferences.background) {
-            "image" -> preferences.backgroundUrl?.let { AsyncImage(model=it,contentDescription=null,contentScale=ContentScale.Crop,modifier=Modifier.fillMaxSize()); Box(Modifier.fillMaxSize().background(base.copy(alpha=.72f))) }
-            "aurora", "midnight", "rose", "paper" -> {
-                val tint=when(preferences.background) { "aurora" -> Color(0xFF28564B); "midnight" -> Color(0xFF363359); "rose" -> Color(0xFF643340); else -> Color(0xFF68604F) }
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(base,tint.copy(alpha=.28f),base))))
-                Canvas(Modifier.fillMaxSize()) {
-                    val step=if(preferences.background=="paper") 24.dp.toPx() else 64.dp.toPx()
-                    var y=0f
-                    while(y<size.height) {
-                        var x=0f
-                        while(x<size.width) { drawCircle(tint.copy(alpha=.14f),if(preferences.background=="paper") .6.dp.toPx() else 1.4.dp.toPx(),Offset(x,y)); x+=step }
-                        y+=step
-                    }
+fun PresetArtwork(key: String, modifier: Modifier = Modifier) {
+    val base = MaterialTheme.colorScheme.background
+    val tint = when (key) {
+        "aurora" -> Color(0xFF4D9C89); "midnight" -> Color(0xFF777BBC)
+        "rose" -> Color(0xFFAD7486); "paper" -> Color(0xFFADA087); else -> Color(0xFF606874)
+    }
+    Canvas(modifier.background(base)) {
+        drawRect(Brush.linearGradient(listOf(base, tint.copy(alpha = .28f), base), end = Offset(size.width, size.height)))
+        if (key == "paper") {
+            val step = 22.dp.toPx()
+            var y = 0f
+            while (y < size.height) { drawLine(tint.copy(alpha = .10f), Offset(0f, y), Offset(size.width, y), .5.dp.toPx()); y += step }
+        } else {
+            repeat(5) { i ->
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(-size.width * .2f, size.height * (.55f + i * .08f))
+                    cubicTo(size.width * .2f, -size.height * .2f, size.width * .7f, size.height * 1.2f, size.width * 1.2f, size.height * (.12f + i * .08f))
                 }
+                drawPath(path, tint.copy(alpha = .12f - i * .015f), style = Stroke((if (i == 0) 24f else 1f).dp.toPx()))
             }
         }
+    }
+}
+
+@Composable
+private fun AppearanceImage(id: String, url: String?, modifier: Modifier, description: String? = null) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val request = androidx.compose.runtime.remember(id, url) {
+        coil.request.ImageRequest.Builder(context).data(url).memoryCacheKey("appearance:$id").diskCacheKey("appearance:$id").crossfade(false).build()
+    }
+    if (url != null) AsyncImage(model = request, contentDescription = description, contentScale = ContentScale.Crop, modifier = modifier)
+}
+
+@Composable
+fun AppearanceBackdrop(preferences: AppearanceDto, modifier: Modifier = Modifier) {
+    val base = MaterialTheme.colorScheme.background
+    Box(modifier) {
+        if (preferences.background == "image") {
+            AppearanceImage(preferences.backgroundId, preferences.backgroundUrl, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(base.copy(alpha = .72f)))
+        } else if (preferences.background != "default") PresetArtwork(preferences.background, Modifier.fillMaxSize())
     }
 }
 @Composable
 fun AppearanceProfileHeader(name: String,avatarUrl: String?,stats: List<ProfileCountStat>,appearance: AppearanceDto,modifier: Modifier=Modifier) {
     Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        appearance.bannerUrl?.let { AsyncImage(model=it,contentDescription="Profile banner",contentScale=ContentScale.Crop,modifier=Modifier.fillMaxWidth().height(130.dp).clip(RoundedCornerShape(18.dp))) }
+        if (appearance.bannerId.isNotEmpty()) Box(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(16.dp))) {
+            val preset = appearancePreset(appearance.bannerId)
+            if (preset != null) PresetArtwork(preset, Modifier.fillMaxSize())
+            else AppearanceImage(appearance.bannerId, appearance.bannerUrl, Modifier.fillMaxSize(), "Profile banner")
+        }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
-            appearance.profileBackgroundUrl?.let { AsyncImage(model=it,contentDescription=null,contentScale=ContentScale.Crop,modifier=Modifier.matchParentSize()); Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha=.76f))) }
-            Row(Modifier.fillMaxWidth().padding(if(appearance.profileBackgroundUrl!=null) 12.dp else 0.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+            if (appearance.profileBackgroundId.isNotEmpty()) {
+                val preset = appearancePreset(appearance.profileBackgroundId)
+                if (preset != null) PresetArtwork(preset, Modifier.matchParentSize())
+                else AppearanceImage(appearance.profileBackgroundId, appearance.profileBackgroundUrl, Modifier.matchParentSize())
+                Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = .42f)))
+            }
+            Row(Modifier.fillMaxWidth().padding(if(appearance.profileBackgroundId.isNotEmpty()) 12.dp else 0.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                 Box(Modifier.size(104.dp),contentAlignment=Alignment.Center) {
                     CircleAvatar(name=name.ifBlank{"User"},avatarUrl=avatarUrl,modifier=Modifier.size(if(appearance.frame=="none") 104.dp else 88.dp))
                     ProfileFrame(appearance.frame,Modifier.fillMaxSize())
@@ -73,21 +110,23 @@ fun AppearanceProfileHeader(name: String,avatarUrl: String?,stats: List<ProfileC
         }
     }
 }
-@Composable private fun ProfileFrame(frame: String,modifier: Modifier) {
+@Composable fun ProfileFrame(frame: String,modifier: Modifier) {
     if(frame=="none") return
     val colors=when(frame) { "halo" -> listOf(Color(0xFFFFD99C),Color(0xFFB3884B)); "orbit" -> listOf(Color(0xFFACC6FF),Color(0xFFD6AEFF)); "laurel" -> listOf(Color(0xFFBFE1BD),Color(0xFF6D9F79)); else -> listOf(Color(0xFFF7AAD7),Color(0xFFB5C9FF),Color(0xFFB9E9D2)) }
     Canvas(modifier) {
         val radius=size.minDimension/2-3.dp.toPx()
         drawCircle(Brush.sweepGradient(colors+colors.first()),radius,style=Stroke(2.dp.toPx()))
         if(frame=="halo") drawCircle(colors.first().copy(alpha=.5f),radius-4.dp.toPx(),style=Stroke(.8.dp.toPx()))
-        if(frame=="orbit" || frame=="prism") repeat(if(frame=="orbit") 3 else 6) { i ->
-            val angle=i*2*Math.PI/(if(frame=="orbit") 3 else 6)-Math.PI/2
-            drawCircle(colors[i%colors.size],3.dp.toPx(),Offset(center.x+cos(angle).toFloat()*radius,center.y+sin(angle).toFloat()*radius))
+        if (frame == "orbit") {
+            drawArc(colors.last(), 210f, 100f, false, topLeft = Offset(5.dp.toPx(), 5.dp.toPx()), size = androidx.compose.ui.geometry.Size(size.width - 10.dp.toPx(), size.height - 10.dp.toPx()), style = Stroke(1.2.dp.toPx()))
         }
-        if(frame=="laurel") repeat(14) { i ->
-            val angle=(i*18+35)*Math.PI/180
-            val start=Offset(center.x+cos(angle).toFloat()*radius,center.y+sin(angle).toFloat()*radius)
-            drawLine(colors.first(),start,Offset(center.x+cos(angle+.05).toFloat()*(radius-5.dp.toPx()),center.y+sin(angle+.05).toFloat()*(radius-5.dp.toPx())),2.dp.toPx())
+        if (frame == "prism") drawCircle(Brush.sweepGradient(colors.reversed() + colors.last()), radius - 3.dp.toPx(), style = Stroke(.7.dp.toPx()))
+        if (frame == "laurel") repeat(12) { i ->
+            val angle = (i * 20 + 35) * Math.PI / 180
+            val root = Offset(center.x + cos(angle).toFloat() * radius, center.y + sin(angle).toFloat() * radius)
+            val tip = Offset(center.x + cos(angle + .08).toFloat() * (radius - 6.dp.toPx()), center.y + sin(angle + .08).toFloat() * (radius - 6.dp.toPx()))
+            val leaf = androidx.compose.ui.graphics.Path().apply { moveTo(root.x, root.y); quadraticBezierTo(root.x - 4.dp.toPx(), tip.y, tip.x, tip.y); quadraticBezierTo(root.x + 2.dp.toPx(), root.y, root.x, root.y); close() }
+            drawPath(leaf, colors.first())
         }
     }
 }

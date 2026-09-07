@@ -48,6 +48,7 @@ private val DarkColors = darkColorScheme(
     surfaceContainerHighest = Color(0xFF1E2227)
 )
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun AppTheme(
     themeMode: ThemeMode,
@@ -62,6 +63,8 @@ fun AppTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = AppTypography,
-        content = content
+        content = {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalRippleConfiguration provides null, content = content)
+        }
     )
 }

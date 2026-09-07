@@ -230,10 +230,10 @@ fun NewHomeRoute(
                         onClick = onOpenChats
                     )
                     
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                     ) {
                         item {
@@ -253,15 +253,15 @@ fun NewHomeRoute(
                     }
 
                     if (state.topPicks.isNotEmpty() || state.isFeedLoading) {
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         SectionHeader(
                             title = "Top Picks",
                             modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                             onClick = null
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                         ) {
                             if (state.isFeedLoading && state.topPicks.isEmpty()) {
@@ -283,15 +283,15 @@ fun NewHomeRoute(
                     }
 
                     if (state.recentChats.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         SectionHeader(
                             title = "Continue",
                             modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                             onClick = onOpenChats
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                         ) {
                             items(state.recentChats, key = { "continue_${it.id}" }) { chat ->
@@ -303,7 +303,7 @@ fun NewHomeRoute(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     SectionHeader(
                         title = "Recommended",
                         modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),

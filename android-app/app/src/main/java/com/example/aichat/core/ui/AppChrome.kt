@@ -37,11 +37,11 @@ import com.example.aichat.core.design.AppIcons
 import com.example.aichat.core.design.appOutlineSurface
 
 object AppChrome {
-    val screenHorizontalPadding = 20.dp
+    val screenHorizontalPadding = 16.dp
     val screenTopPadding = 6.dp
     val screenBottomPadding = 12.dp
-    val sectionSpacing = 10.dp
-    val gridSpacing = 8.dp
+    val sectionSpacing = 8.dp
+    val gridSpacing = 6.dp
     val compactControlSize = 42.dp
     val compactControlGap = 10.dp
     val compactHeaderVerticalPadding = 4.dp
@@ -52,7 +52,7 @@ object AppChrome {
     val bottomBarVerticalPadding = 0.dp
     val bottomBarItemHorizontalPadding = 4.dp
     val bottomBarIconSize = 28.dp
-    val listRowGap = 12.dp
+    val listRowGap = 10.dp
 }
 
 @Composable

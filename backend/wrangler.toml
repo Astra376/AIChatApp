@@ -11,8 +11,14 @@ OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
 OPENROUTER_PROVIDERS = "venice"
 OPENROUTER_ULTRA_MODEL = "deepseek/deepseek-v4-pro-0813"
 OPENROUTER_FALLBACK_MODELS = ""
-FAL_MODEL = "fal-ai/nano-banana-2"
-FAL_ULTRA_MODEL = "fal-ai/nano-banana-pro"
+# Keep the established quality model until the comparison is reviewed.
+OPENROUTER_PORTRAIT_REALISTIC_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_PORTRAIT_STYLIZED_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_EXPRESSION_REALISTIC_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_EXPRESSION_STYLIZED_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_BACKGROUND_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_PORTRAIT_PREVIEW_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_PORTRAIT_PREMIUM_MODEL = "google/gemini-3-pro-image"
 R2_PUBLIC_BASE_URL = "https://character-chat-worker.robloxproxy.workers.dev/v1/assets"
 
 [[d1_databases]]
@@ -26,3 +32,12 @@ bucket_name = "character-chat-assets"
 
 [triggers]
 crons = ["*/15 * * * *"]
+
+
+[[durable_objects.bindings]]
+name = "IMAGE_JOBS"
+class_name = "ImageGenerationJob"
+
+[[migrations]]
+tag = "image-jobs-v1"
+new_sqlite_classes = ["ImageGenerationJob"]

@@ -95,10 +95,16 @@ Fill in these fields:
   Put the OpenRouter model slug you want to use
 - `OPENROUTER_FALLBACK_MODELS`
   Optional comma-separated model slugs, in priority order, used when the primary model is unavailable
-- `FAL_MODEL`
-  Put the fal model slug you want to use
-- `FAL_BACKGROUND_MODEL`
-  Optional. Put a landscape/background-friendly fal model slug here, or omit it to reuse `FAL_MODEL`
+- `OPENROUTER_PORTRAIT_REALISTIC_MODEL` / `OPENROUTER_PORTRAIT_STYLIZED_MODEL`
+  Models for the selected full-resolution portrait, classified by the requested art style
+- `OPENROUTER_EXPRESSION_REALISTIC_MODEL` / `OPENROUTER_EXPRESSION_STYLIZED_MODEL`
+  Reference-editing models selected after the character-consistency comparison
+- `OPENROUTER_BACKGROUND_MODEL`
+  Model for scene and appearance backgrounds
+- `OPENROUTER_PORTRAIT_PREVIEW_MODEL`
+  Nano Banana 2 for supported 512px previews
+- `OPENROUTER_PORTRAIT_PREMIUM_MODEL`
+  Nano Banana Pro for Ultra portrait refinement
 - `R2_PUBLIC_BASE_URL`
   Put the public base URL for your bucket or asset domain
 
@@ -139,7 +145,7 @@ Create the OpenRouter API key:
 wrangler secret put OPENROUTER_API_KEY
 ```
 
-Create the fal API key:
+Create the fal API key only for voice synthesis and voice creation:
 
 ```bash
 wrangler secret put FAL_API_KEY
@@ -221,7 +227,7 @@ Needs real credentials/resources to go live:
 - D1 persistence in Cloudflare
 - R2 asset serving
 - OpenRouter model responses
-- fal portrait generation
+- OpenRouter image generation
 
 ## 8. Voices, notifications and Ultra (September 2026)
 
@@ -397,3 +403,30 @@ by default it uses the available OpenRouter provider set. The Flash Venice
 restriction must not be inherited by Pro because that provider does not list
 Pro 0813. Provider availability, provider policies and latency can change;
 no unconditional speed or content-policy guarantee is encoded in the UI.
+
+
+## OpenRouter image pipeline
+
+All new images use `POST https://openrouter.ai/api/v1/images` with the existing
+`OPENROUTER_API_KEY`; text-provider restrictions are not passed to image requests.
+Image bytes are validated and written directly to R2. The model and art style are
+stored with portraits, so a generic refinement prompt does not change an anime
+portrait into a photograph. Expressions always receive the chosen portrait as an
+image reference. A missing/rejected model can fall back to Nano Banana on OpenRouter;
+an ambiguous timeout does not silently submit another paid generation.
+
+The IMAGE_JOBS Durable Object binding and `image-jobs-v1` SQLite migration keep
+expression calls alive independently of the Android screen and the HTTP request.
+Already-purchased Fal jobs have a read-only completion path; no new Fal image request
+is submitted. Existing saved images remain available. Fal is used for voices only.
+
+The bounded live comparison is defined in `backend/evaluation/run.json` and
+`src/services/images/evaluationCases.ts`. Changing the manifest triggers evaluation
+after the backend's normal tests and deployment. CI installs an expiring evaluation
+secret, runs only fixed synthetic cases with stable job IDs, saves original outputs
+and reported costs as an artifact, then deletes the secret. Repeated polling never
+creates additional images. There is no public arbitrary-prompt evaluation endpoint.
+Backend-only pushes skip the Android build.
+
+API references: [OpenRouter Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation),
+[image model catalog](https://openrouter.ai/api/v1/images/models).

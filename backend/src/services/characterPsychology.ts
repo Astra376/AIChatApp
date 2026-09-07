@@ -4,7 +4,9 @@ import type { Env, RequestContext } from "../env";
 import { AppError, assert } from "../lib/errors";
 import { getCharacterById } from "../db/queries/characters";
 import { completeChatText } from "../providers/openrouter";
-import { queuePortraitWithFal, pollPortraitWithFal, type QueuedPortraitJob } from "../providers/fal";
+import { queueImage, imageJobStatus, type QueuedImageJob } from "./images/jobs";
+import { portraitModel, portraitStyle, IMAGE_MODELS } from "../providers/openrouterImages";
+import { pollLegacyFalImage } from "../providers/legacyFalImages";
 import { storeRemoteImageInR2 } from "../providers/r2";
 import { publicAssetUrl } from "../lib/assets";
 
@@ -131,10 +133,10 @@ export async function generateEmotionPortraits(context: RequestContext, id: stri
 /** A GET/cron advances durable provider jobs without waiting for the image itself. */
 export async function resumeEmotionPortraits(env: Env, characterId?: string) {
   await ensureCharacterPsychologySchema(env);
-  const result = await env.DB.prepare(`SELECT e.character_id,e.emotion,e.source_url,e.job_json,e.updated_at,c.owner_user_id
+  const result = await env.DB.prepare(`SELECT e.character_id,e.emotion,e.source_url,e.job_json,e.updated_at,c.owner_user_id,c.description
     FROM character_emotion_portraits e JOIN characters c ON c.id=e.character_id
     WHERE e.status='generating' ${characterId ? "AND e.character_id=?" : ""} ORDER BY e.updated_at ASC LIMIT 12`)
-    .bind(...(characterId ? [characterId] : [])).all<{ character_id:string;emotion:string;source_url:string;job_json:string|null;updated_at:number;owner_user_id:string }>();
+    .bind(...(characterId ? [characterId] : [])).all<{ character_id:string;emotion:string;source_url:string;job_json:string|null;updated_at:number;owner_user_id:string;description:string }>();
   for (let start = 0; start < result.results.length; start += 3) await Promise.all(result.results.slice(start,start+3).map(async row => {
     try {
       if (!row.job_json) {
@@ -142,8 +144,20 @@ export async function resumeEmotionPortraits(env: Env, characterId?: string) {
         const claim = await env.DB.prepare("UPDATE character_emotion_portraits SET job_json='claiming',updated_at=? WHERE character_id=? AND emotion=? AND source_url=? AND job_json IS NULL RETURNING emotion")
           .bind(Date.now(),row.character_id,row.emotion,row.source_url).first();
         if (!claim) return;
-        const job = await queuePortraitWithFal(env,
-          `Use this exact character as the identity reference. Preserve the same face, facial proportions, age, hair, eyes, skin, clothing and art style. Upper-body portrait, consistent front three-quarter framing and lighting, quiet unobtrusive dark backdrop. Express ${row.emotion} naturally through face and posture, no exaggerated caricature. No captions, borders or text.`, row.source_url);
+        const sourceKey = decodeURIComponent(new URL(row.source_url).pathname.split("/").pop() ?? "");
+        const metadata = await env.ASSETS.head(sourceKey);
+        const knownStyle = metadata?.customMetadata?.style;
+        const style = knownStyle === "realistic" || knownStyle === "stylized" ? knownStyle : portraitStyle(row.description || "");
+        const job = await queueImage(env, {
+          image: {
+            // Unknown uploaded styles use the conservative reference-editing model.
+            model: knownStyle ? portraitModel(env, style, true) : IMAGE_MODELS.nano,
+            prompt: `Edit only the expression of the person in the reference. Preserve the exact identity: facial geometry, nose, jaw, eye color and spacing, hairline, hairstyle and color, age, skin, identifying marks, jewelry and clothing. Keep the same framing, camera angle, pose, lighting, background and art style. Upper-body portrait. Express ${row.emotion} naturally through face and subtle posture, without caricature. No captions, borders or text.`,
+            referenceImageUrl: row.source_url
+          },
+          outputKey: `portraits/${row.owner_user_id}/emotion_${row.character_id}_${row.emotion}_${Date.now()}.jpg`,
+          style, fallback: true
+        });
         await env.DB.prepare("UPDATE character_emotion_portraits SET job_json=?,updated_at=? WHERE character_id=? AND emotion=? AND source_url=? AND job_json='claiming'")
           .bind(JSON.stringify(job),Date.now(),row.character_id,row.emotion,row.source_url).run();
         return;
@@ -152,17 +166,26 @@ export async function resumeEmotionPortraits(env: Env, characterId?: string) {
         if (row.updated_at < Date.now()-180_000) await env.DB.prepare("UPDATE character_emotion_portraits SET status='failed' WHERE character_id=? AND emotion=? AND job_json='claiming'").bind(row.character_id,row.emotion).run();
         return;
       }
-      const url = await pollPortraitWithFal(env, JSON.parse(row.job_json) as QueuedPortraitJob);
-      if (!url) {
-        if (row.updated_at < Date.now()-1_800_000) throw new Error("Expression generation expired");
+      const job = JSON.parse(row.job_json) as QueuedImageJob;
+      let imageUrl: string | undefined;
+      if (job.provider === "openrouter") {
+        const result = await imageJobStatus(env, job);
+        if (result.status === "failed") throw new AppError(502, "IMAGE_FAILED", "Expression generation failed.");
+        imageUrl = result.imageUrl;
+      } else {
+        // Drain only already-purchased legacy requests; never submit another Fal image.
+        const url = await pollLegacyFalImage(env, JSON.parse(row.job_json));
+        if (url) imageUrl = await storeRemoteImageInR2(env, `portraits/${row.owner_user_id}/emotion_${row.character_id}_${row.emotion}_${Date.now()}.jpg`, url);
+      }
+      if (!imageUrl) {
+        if (row.updated_at < Date.now()-1_800_000) throw new AppError(502, "IMAGE_FAILED", "Expression generation expired.");
         return;
       }
-      const imageUrl = await storeRemoteImageInR2(env,`portraits/${row.owner_user_id}/${row.character_id}_${row.emotion}_${row.updated_at}.jpg`,url);
       await env.DB.prepare("UPDATE character_emotion_portraits SET image_url=?,status='ready',updated_at=? WHERE character_id=? AND emotion=? AND source_url=? AND job_json=?")
         .bind(imageUrl,Date.now(),row.character_id,row.emotion,row.source_url,row.job_json).run();
     } catch (error) {
       // Transient status errors keep their provider request; never purchase the same image again on a retry.
-      if (row.job_json && row.job_json !== "claiming" && row.updated_at > Date.now()-1_800_000 && !(error instanceof AppError && error.code === "FAL_FAILED")) return;
+      if (row.job_json && row.job_json !== "claiming" && row.updated_at > Date.now()-1_800_000 && !(error instanceof AppError && error.code === "IMAGE_FAILED")) return;
       await env.DB.prepare("UPDATE character_emotion_portraits SET status='failed',updated_at=? WHERE character_id=? AND emotion=? AND source_url=?")
         .bind(Date.now(),row.character_id,row.emotion,row.source_url).run();
     }

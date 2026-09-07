@@ -1,3 +1,4 @@
+export { ImageGenerationJob } from "./services/images/jobs";
 import type { Env, RequestContext } from "./env";
 import { processOfflineMessages } from "./services/chat/offline";
 import { requireAuth } from "./lib/auth";

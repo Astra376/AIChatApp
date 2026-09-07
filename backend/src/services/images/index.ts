@@ -3,34 +3,36 @@ import type { RequestContext } from "../../env";
 import { publicAssetUrl } from "../../lib/assets";
 import { AppError } from "../../lib/errors";
 import { createId } from "../../lib/ids";
-import { generateChatBackgroundWithFal, generatePortraitWithFal } from "../../providers/fal";
-import { storeRemoteImageInR2 } from "../../providers/r2";
+import { generateImageWithFallback, storeGeneratedImage, portraitModel, portraitStyle, IMAGE_MODELS, type PortraitStyle } from "../../providers/openrouterImages";
 
 export async function generateCharacterPortrait(
   context: RequestContext, prompt: string, preview = false, sourceAvatarUrl: string | null = null
 ) {
+  let referenceStyle: PortraitStyle | undefined;
   if (sourceAvatarUrl) {
     const prefix = publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, `portraits/${context.user!.userId}/reference.jpg`).slice(0, -"reference.jpg".length);
     const filename = sourceAvatarUrl.startsWith(prefix) ? sourceAvatarUrl.slice(prefix.length) : "";
-    if (!/^[a-zA-Z0-9_-]+\.jpg$/.test(filename)
-      || !await context.env.ASSETS.head(`portraits/${context.user!.userId}/${filename}`)) {
+    const owned = /^[a-zA-Z0-9_-]+\.jpg$/.test(filename) ? await context.env.ASSETS.head(`portraits/${context.user!.userId}/${filename}`) : null;
+    if (!owned) {
       throw new AppError(400, "INVALID_PORTRAIT", "Choose one of your generated portraits first.");
     }
+    if (owned.customMetadata?.style === "stylized" || owned.customMetadata?.style === "realistic") referenceStyle = owned.customMetadata.style;
   }
-  const premium = !preview && context.env.FAL_ULTRA_MODEL && await hasUltra(context.env, context.user!.userId);
-  const remoteUrl = await generatePortraitWithFal(
-    premium ? { ...context.env, FAL_MODEL: context.env.FAL_ULTRA_MODEL! } : context.env,
-    [
+  const style = referenceStyle ?? portraitStyle(prompt);
+  const premium = !preview && await hasUltra(context.env, context.user!.userId);
+  const model = preview ? context.env.OPENROUTER_PORTRAIT_PREVIEW_MODEL || portraitModel(context.env, style)
+    : premium ? context.env.OPENROUTER_PORTRAIT_PREMIUM_MODEL || IMAGE_MODELS.premium : portraitModel(context.env, style);
+  const image = await generateImageWithFallback(context.env, {
+    model, preview, referenceImageUrl: sourceAvatarUrl ?? undefined,
+    prompt: [
       "Square full-bleed character portrait that fills the entire image frame.",
       "Do not make a circular avatar, round crop, badge, medallion, border, or framed icon.",
       sourceAvatarUrl ? "Enhance this exact portrait at full resolution. Preserve the same face, identity, pose, composition, clothing and style." : "",
       prompt
-    ].join("\n"),
-    preview,
-    sourceAvatarUrl ?? undefined
-  );
+    ].join("\n")
+  });
   const key = `portraits/${context.user!.userId}/${createId("portrait")}.jpg`;
-  const avatarUrl = await storeRemoteImageInR2(context.env, key, remoteUrl);
+  const avatarUrl = await storeGeneratedImage(context.env, key, image, style);
   return { avatarUrl };
 }
 
@@ -51,8 +53,11 @@ export async function generateChatBackground(
     return { imageUrl: publicAssetUrl(context.env.R2_PUBLIC_BASE_URL, key) };
   }
 
-  const remoteUrl = await generateChatBackgroundWithFal(context.env, prompt);
-  const imageUrl = await storeRemoteImageInR2(context.env, key, remoteUrl);
+  const image = await generateImageWithFallback(context.env, {
+    model: context.env.OPENROUTER_BACKGROUND_MODEL || IMAGE_MODELS.nano,
+    prompt, aspectRatio: "9:16"
+  });
+  const imageUrl = await storeGeneratedImage(context.env, key, image);
   return { imageUrl };
 }
 

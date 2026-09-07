@@ -2,12 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env, RequestContext } from "../env";
-import { queuePortraitWithFal, pollPortraitWithFal } from "../providers/fal";
+import { queueImage, imageJobStatus } from "./images/jobs";
 import { storeRemoteImageInR2 } from "../providers/r2";
 import { completeChatText } from "../providers/openrouter";
 import { autoCreateCharacter, generateEmotionPortraits, getCharacterPsychologyDefaults, normalizeCharacterPsychology,
   readCharacterPsychology, readEmotionPortraits, resumeEmotionPortraits, saveCharacterPsychology } from "./characterPsychology";
-vi.mock("../providers/fal", () => ({queuePortraitWithFal:vi.fn(),pollPortraitWithFal:vi.fn()}));
+vi.mock("./images/jobs", () => ({queueImage:vi.fn(),imageJobStatus:vi.fn()}));
 vi.mock("../providers/r2", () => ({storeRemoteImageInR2:vi.fn()}));
 vi.mock("../providers/openrouter", () => ({completeChatText:vi.fn()}));
 function setup() {
@@ -25,7 +25,7 @@ function setup() {
     async all(){return {results:db.prepare(sql).all(...args)}}
   }; }
   const env={DB:{prepare:statement,async batch(statements:any[]){db.exec("BEGIN");try{const results=[];for(const s of statements)results.push(await s.run());db.exec("COMMIT");return results}catch(e){db.exec("ROLLBACK");throw e}}},
-    R2_PUBLIC_BASE_URL:"https://assets.example", FAL_MODEL:"fal-ai/nano-banana-2",ASSETS:{head:vi.fn(async()=>({}))},OPENROUTER_PROVIDERS:"venice",OPENROUTER_ULTRA_MODEL:"deepseek/deepseek-v4-pro-0813"} as unknown as Env;
+    R2_PUBLIC_BASE_URL:"https://assets.example", ASSETS:{head:vi.fn(async()=>({}))},OPENROUTER_PROVIDERS:"venice",OPENROUTER_ULTRA_MODEL:"deepseek/deepseek-v4-pro-0813"} as unknown as Env;
   const context=(id="owner")=>({env,user:{userId:id}} as RequestContext);
   return {db,env,context};
 }
@@ -61,30 +61,30 @@ describe("character psychology and durable expressions",()=>{
   });
   it("queues expressions once and resumes their provider jobs across requests",async()=>{
     const {db,env,context}=setup();try{
-      vi.mocked(queuePortraitWithFal).mockImplementation(async(_env,prompt)=>({model:"fal-ai/nano-banana-2/edit",requestId:prompt,statusUrl:"https://queue.fal.run/status",resultUrl:"https://queue.fal.run/result"}));
-      vi.mocked(pollPortraitWithFal).mockResolvedValue(null);
+      vi.mocked(queueImage).mockImplementation(async(_env,input)=>({provider:"openrouter",id:input.outputKey}));
+      vi.mocked(imageJobStatus).mockResolvedValue({status:"running"});
       await generateEmotionPortraits(context(),"character");
-      expect(queuePortraitWithFal).toHaveBeenCalledTimes(6);
-      for(const call of vi.mocked(queuePortraitWithFal).mock.calls) expect(call[2]).toBe("https://assets.example/portraits%2Fowner%2Fsource.jpg");
+      expect(queueImage).toHaveBeenCalledTimes(6);
+      for(const call of vi.mocked(queueImage).mock.calls) expect(call[1].image.referenceImageUrl).toBe("https://assets.example/portraits%2Fowner%2Fsource.jpg");
       await Promise.all([resumeEmotionPortraits(env),resumeEmotionPortraits(env)]);
-      expect(queuePortraitWithFal).toHaveBeenCalledTimes(6);
-      vi.mocked(pollPortraitWithFal).mockResolvedValue("https://fal.example/expression.jpg");
+      expect(queueImage).toHaveBeenCalledTimes(6);
+      vi.mocked(imageJobStatus).mockResolvedValue({status:"completed",imageUrl:"https://assets.example/expression.jpg"});
       vi.mocked(storeRemoteImageInR2).mockImplementation(async(_env,key)=>`https://assets.example/${key}`);
       await resumeEmotionPortraits(env);
       const result=await readEmotionPortraits(context("viewer"),"character");
       expect(Object.keys(result.portraits)).toHaveLength(6);expect(result.generating).toBe(false);
       await generateEmotionPortraits(context(),"character");
-      expect(queuePortraitWithFal).toHaveBeenCalledTimes(6);
+      expect(queueImage).toHaveBeenCalledTimes(6);
     }finally{db.close()}
   });
   it("retains the same paid provider job when a status request briefly fails",async()=>{
     const {db,env,context}=setup();try{
-      vi.mocked(queuePortraitWithFal).mockResolvedValue({model:"m",requestId:"r",statusUrl:"https://q.example/s",resultUrl:"https://q.example/r"});
+      vi.mocked(queueImage).mockResolvedValue({provider:"openrouter",id:"r"});
       await generateEmotionPortraits(context(),"character");
-      vi.mocked(pollPortraitWithFal).mockRejectedValue(new Error("Network interrupted"));
+      vi.mocked(imageJobStatus).mockRejectedValue(new Error("Network interrupted"));
       await resumeEmotionPortraits(env);
       expect(db.prepare("SELECT count(*) AS count FROM character_emotion_portraits WHERE status='generating' AND job_json IS NOT NULL").get()?.count).toBe(6);
-      expect(queuePortraitWithFal).toHaveBeenCalledTimes(6);
+      expect(queueImage).toHaveBeenCalledTimes(6);
     }finally{db.close()}
   });
   it("uses Pro for complete AI creation and removes the incompatible Standard provider restriction",async()=>{

@@ -1,3 +1,4 @@
+import { SCENE_STYLE } from "./scenes";
 import { upperBodyPrompt, expressionPrompt } from "./characterArtPrompts";
 import { IMAGE_MODELS, type ImageInput } from "../../providers/openrouterImages";
 export interface EvaluationCase { id: string; label: string; image: ImageInput; reference?: string; }
@@ -58,4 +59,12 @@ const affordableAlphaCases: EvaluationCase[] = (["photo", "anime"] as const).fla
     { id: `${id}_sad`, label: `${style} sadness / ${tier.key}`, reference: id, image: { ...settings, prompt: expressionPrompt("quiet sadness") } }
   ];
 }));
-export const imageEvaluationCasesForRun = (run: string) => run.startsWith("affordable_alpha_") ? affordableAlphaCases : run.startsWith("transparent_body_") ? transparentImageEvaluationCases : legacyImageEvaluationCases;
+const animeSceneCases: EvaluationCase[] = [
+  { id: "cafe", prompt: "An empty neighborhood cafe at dusk. Worn walnut tables, two teal chairs, amber pendant lights, rain running down a large street-facing window. Quiet composition with a clear window on the right. No signs or menus." },
+  { id: "forest", prompt: "A moonlit birch forest clearing. White trunks, mossy stones, one narrow winding footpath, deep indigo sky and a soft distant lantern glow. No buildings." },
+  { id: "room", prompt: "A quiet medieval castle bedroom at sunrise. One simple wooden bed with a dark blue blanket, a narrow arched stone window on the left, a wooden desk with a closed book, warm sunlight on grey stone walls. No modern objects." }
+].flatMap(scene => [
+  { id: `${scene.id}_klein4`, label: `${scene.id} / Klein 4B anime`, image: { model: "black-forest-labs/flux.2-klein-4b", prompt: `${SCENE_STYLE}\n${scene.prompt}`, aspectRatio: "9:16" } },
+  { id: `${scene.id}_nano`, label: `${scene.id} / previous Gemini anime`, image: { model: IMAGE_MODELS.nano, prompt: `${SCENE_STYLE}\n${scene.prompt}`, aspectRatio: "9:16" } }
+]);
+export const imageEvaluationCasesForRun = (run: string) => run.startsWith("anime_scenes_") ? animeSceneCases : run.startsWith("affordable_alpha_") ? affordableAlphaCases : run.startsWith("transparent_body_") ? transparentImageEvaluationCases : legacyImageEvaluationCases;

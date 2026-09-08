@@ -132,7 +132,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -1626,37 +1626,45 @@ internal fun rememberTypedStreamText(
     // A reopened chat begins with received text. Subsequent chunks and the final
     // normalized result advance on this one clock, independent of network timing.
     var displayedText by remember(streamKey) { mutableStateOf(sourceText) }
-    val latestText by rememberUpdatedState(sourceText)
-    val latestAnimate by rememberUpdatedState(animate)
+    val updates = remember(streamKey) { Channel<Pair<String, Boolean>>(Channel.CONFLATED) }
     val latestHaptics by rememberUpdatedState(hapticsEnabled)
     val view = LocalView.current
+    LaunchedEffect(streamKey, sourceText, animate) {
+        updates.send(sourceText to animate)
+    }
     LaunchedEffect(streamKey) {
         if (streamKey == null) return@LaunchedEffect
-        var lastFrame = 0L
-        var budget = 0.0
-        while (true) {
-            snapshotFlow { latestText to latestAnimate }.first { it.first != displayedText }
-            val frame = withFrameNanos { it }
-            val target = latestText
-            if (!latestAnimate) {
-                displayedText = target
-                budget = 0.0
-            } else {
-                // A final formatter may adjust already visible punctuation. Keep
-                // the reveal position instead of dumping the entire final message.
-                var position = displayedText.length.coerceAtMost(target.length)
-                if (position > 0 && position < target.length && Character.isLowSurrogate(target[position])) position--
-                budget += if (lastFrame == 0L) 1.0 else ((frame - lastFrame).coerceAtMost(50_000_000L) / 1_000_000_000.0) * 60.0
-                val available = target.codePointCount(position, target.length)
-                val count = minOf(budget.toInt(), available)
-                position = target.offsetByCodePoints(position, count)
-                displayedText = target.take(position)
-                budget = if (position == target.length) 0.0 else budget - count
-                if (count > 0 && latestHaptics) view.performHapticFeedback(
-                    if (android.os.Build.VERSION.SDK_INT >= 34) android.view.HapticFeedbackConstants.SEGMENT_TICK else android.view.HapticFeedbackConstants.KEYBOARD_TAP
-                )
+        // Input notifications wake this worker once. It owns the frame clock
+        // until the queue is empty; neither another token nor completion can
+        // restart it, and advancing a character never waits for a snapshot flow.
+        for (update in updates) {
+            var pending = update
+            var lastFrame = 0L
+            var budget = 0.0
+            while (pending.first != displayedText) {
+                val frame = withFrameNanos { it }
+                updates.tryReceive().getOrNull()?.let { pending = it }
+                val (target, shouldAnimate) = pending
+                if (!shouldAnimate) {
+                    displayedText = target
+                    budget = 0.0
+                } else {
+                    // Final formatting may revise punctuation without flushing
+                    // the characters still waiting to be revealed.
+                    var position = displayedText.length.coerceAtMost(target.length)
+                    if (position > 0 && position < target.length && Character.isLowSurrogate(target[position])) position--
+                    budget += if (lastFrame == 0L) 1.0 else ((frame - lastFrame).coerceAtMost(50_000_000L) / 1_000_000_000.0) * 60.0
+                    val available = target.codePointCount(position, target.length)
+                    val count = minOf(budget.toInt(), available)
+                    position = target.offsetByCodePoints(position, count)
+                    displayedText = target.take(position)
+                    budget = if (position == target.length) 0.0 else budget - count
+                    if (count > 0 && latestHaptics) view.performHapticFeedback(
+                        if (android.os.Build.VERSION.SDK_INT >= 34) android.view.HapticFeedbackConstants.SEGMENT_TICK else android.view.HapticFeedbackConstants.KEYBOARD_TAP
+                    )
+                }
+                lastFrame = frame
             }
-            lastFrame = frame
         }
     }
     return if (streamKey == null) sourceText else displayedText

@@ -338,11 +338,11 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             val background = MaterialTheme.colorScheme.background
-            ScrollChromeBar(chrome, top = true) { Column {
+            Column(Modifier.statusBarsPadding()) { ScrollChromeBar(chrome, top = true) {
                 MainPageHeader(
                     title = current.contentDescription,
                     onOpenSearch = { onOpen("search") }, onOpenActivity = { onOpen("activity") },
-                    modifier = Modifier.fillMaxWidth().background(background).statusBarsPadding()
+                    modifier = Modifier.fillMaxWidth().background(background)
                         .padding(horizontal = AppChrome.screenHorizontalPadding, vertical = 2.dp),
                     titlePrefix = if (current == MainDestination.Chats && unread > 0) {
                         { Badge { Text(unread.toString()) } }
@@ -352,10 +352,10 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
             }
         },
         bottomBar = {
-            ScrollChromeBar(chrome, top = false) { NavigationBar(
+            Column(Modifier.navigationBarsPadding()) { ScrollChromeBar(chrome, top = false) { NavigationBar(
                 containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
-                windowInsets = WindowInsets.navigationBars,
-                modifier = Modifier.height(AppChrome.bottomBarHeight + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+                windowInsets = WindowInsets(0, 0, 0, 0),
+                modifier = Modifier.height(AppChrome.bottomBarHeight)
             ) {
                 bottomDestinations.filter { !isUltra || it != MainDestination.Ultra }.forEach { destination ->
                     val selected = current == destination
@@ -384,6 +384,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                         )
                     )
                 }
+            }
             }
             }
         }

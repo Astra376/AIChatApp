@@ -1625,7 +1625,10 @@ internal fun rememberTypedStreamText(
 ): String {
     // A reopened chat begins with received text. Subsequent chunks and the final
     // normalized result advance on this one clock, independent of network timing.
-    var displayedText by remember(streamKey) { mutableStateOf(sourceText) }
+    val streamAtOpen = remember { streamKey }
+    var displayedText by remember(streamKey) {
+        mutableStateOf(if (streamKey == streamAtOpen) sourceText else "")
+    }
     val updates = remember(streamKey) { Channel<Pair<String, Boolean>>(Channel.CONFLATED) }
     val latestHaptics by rememberUpdatedState(hapticsEnabled)
     val view = LocalView.current

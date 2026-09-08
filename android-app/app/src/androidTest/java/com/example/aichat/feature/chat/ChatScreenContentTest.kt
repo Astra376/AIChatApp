@@ -182,6 +182,24 @@ class ChatScreenContentTest {
     }
 
     @Test
+    fun newReply_withReceivedBurstOnItsFirstFrameStillRevealsGradually() {
+        composeRule.mainClock.autoAdvance = false
+        val chatState = mutableStateOf(ChatUiState(conversation = conversationDetail(listOf(message(0, "Question")))))
+        composeRule.setContent { TestChat(chatState.value) }
+        composeRule.mainClock.advanceTimeByFrame()
+        val received = "Streaming reply received in a single burst. ".repeat(8)
+        updateChatState {
+            chatState.value = chatState.value.copy(activeStream = stream(received))
+        }
+        composeRule.mainClock.advanceTimeBy(160)
+        val displayed = displayedTextStartingWith("Stream")
+        assertTrue("A new reply should start revealing even when its first packet is large", displayed.isNotEmpty())
+        assertTrue("Only reopening an existing stream may skip the reveal", displayed.length < received.length)
+        composeRule.mainClock.advanceTimeBy(received.length * 20L)
+        composeRule.onNodeWithText(received).assertIsDisplayed()
+    }
+
+    @Test
     fun activeReply_revealsReceivedTextBeforeCompletion() {
         composeRule.mainClock.autoAdvance = false
         val chatState = mutableStateOf(ChatUiState(
@@ -191,7 +209,7 @@ class ChatScreenContentTest {
         composeRule.setContent { TestChat(chatState.value) }
         composeRule.mainClock.advanceTimeByFrame()
         val receivedText = "Streaming reply continues with more text. ".repeat(8)
-        composeRule.runOnIdle { chatState.value = chatState.value.copy(activeStream = stream(receivedText)) }
+        updateChatState { chatState.value = chatState.value.copy(activeStream = stream(receivedText)) }
         composeRule.mainClock.advanceTimeBy(128)
 
         val displayed = displayedTextStartingWith("Str")
@@ -207,10 +225,10 @@ class ChatScreenContentTest {
         val chatState = mutableStateOf(ChatUiState(conversation = conversationDetail(listOf(message(0, "Question"))), activeStream = stream("").copy(assistantMessageId = "message-1")))
         composeRule.setContent { TestChat(chatState.value) }
         composeRule.mainClock.advanceTimeByFrame()
-        composeRule.runOnIdle { chatState.value = chatState.value.copy(activeStream = chatState.value.activeStream!!.copy(text = finalText)) }
+        updateChatState { chatState.value = chatState.value.copy(activeStream = chatState.value.activeStream!!.copy(text = finalText)) }
         composeRule.mainClock.advanceTimeBy(160)
         val before = displayedTextStartingWith("Stream")
-        composeRule.runOnIdle {
+        updateChatState {
             chatState.value = chatState.value.copy(conversation = conversationDetail(listOf(message(0, "Question"), message(1, finalText))), activeStream = chatState.value.activeStream!!.copy(status = ActiveStreamStatus.COMPLETED))
         }
         composeRule.mainClock.advanceTimeBy(64)
@@ -311,20 +329,29 @@ class ChatScreenContentTest {
         composeRule.setContent { TestChat(state.value) }
         composeRule.mainClock.advanceTimeBy(300)
         val left = composeRule.onNodeWithText("Original reply").fetchSemanticsNode().boundsInRoot.left
-        composeRule.runOnIdle { state.value = state.value.copy(activeStream = stream("").copy(mode = ActiveStreamMode.REGENERATE, targetMessageId = assistant.id)) }
+        updateChatState { state.value = state.value.copy(activeStream = stream("").copy(mode = ActiveStreamMode.REGENERATE, targetMessageId = assistant.id)) }
         composeRule.mainClock.advanceTimeBy(32)
         val final = "Streaming alternate text must continue typing after completion. ".repeat(5)
-        composeRule.runOnIdle { state.value = state.value.copy(
+        updateChatState { state.value = state.value.copy(
             activeStream = state.value.activeStream!!.copy(text = final, regenerationId = "new", status = ActiveStreamStatus.COMPLETED),
             conversation = conversationDetail(listOf(assistant.copy(selectedRegenerationId = "new", regenerations = listOf(AssistantRegeneration("new",assistant.id,final,5))))) ) }
         composeRule.mainClock.advanceTimeBy(240)
         assertTrue(displayedTextStartingWith("Stream").length < final.length)
         composeRule.mainClock.advanceTimeBy(final.length * 20L)
         composeRule.onNodeWithText(final).assertIsDisplayed()
-        composeRule.runOnIdle { state.value = state.value.copy(activeStream = null) }
+        updateChatState { state.value = state.value.copy(activeStream = null) }
         composeRule.mainClock.advanceTimeBy(400)
         assertTrue(kotlin.math.abs(composeRule.onNodeWithText(final).fetchSemanticsNode().boundsInRoot.left-left)<2f)
         composeRule.onNodeWithText("Another reply").assertDoesNotExist()
+    }
+
+    // With the virtual clock paused, publish the simulated network/Room
+    // update before advancing frames. runOnIdle only synchronizes before block.
+    private fun updateChatState(block: () -> Unit) {
+        composeRule.runOnIdle {
+            block()
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        }
     }
 
     private fun displayedTextStartingWith(prefix: String): String = composeRule

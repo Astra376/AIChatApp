@@ -42,3 +42,18 @@ Background generation switches from Gemini Flash Image to [FLUX.2 Klein 4B](http
 ## Verification
 
 The backend suite includes ranking signals, semantic matching, stable user/version pagination, current visibility, evidence validation, scene reuse, overlapping requests and ownership. Android tests cover manual-scroll follow, pending variant saves, long-page settling, streamed height growth, constant reveal after completion, rapid chunks, reopening, Continue controls, first regeneration and draft-to-commit centering. The GitHub workflow runs the complete chat interaction class on an Android emulator before publishing the APK and deploying the backend.
+
+
+### Live comparison, 8 September 2026
+
+[Phone preview run 34182442466](https://github.com/Astra376/Meek/actions/runs/34182442466) passed 260 backend tests, 112 Android unit/host UI tests and 20 emulator checks. It published version 1.1.65 and deployed the Worker. Screenshot review subsequently corrected the transparent chat scaffold's inherited content color so plain regeneration/variant icons remain visible in dark mode.
+
+Six fixed image requests compared the new Klein 4B model with the previous Gemini 3.1 Flash Image model. The recorded provider outputs and actual billed costs are in [anime-scene-model-evaluation.json](anime-scene-model-evaluation.json).
+
+| Scene | Klein 4B | Gemini |
+| --- | ---: | ---: |
+| Rainy cafe | $0.015 | $0.068503 |
+| Moonlit birch forest | $0.015 | $0.0684125 |
+| Castle bedroom at sunrise | $0.015 | $0.0685335 |
+
+All six completed. Both models rendered illustrated anime environments; Klein preserved the requested broad setting, lighting and key objects at approximately 78% lower image cost. Both cafe images added an extra chair, so the comparison does not establish exact object-count fidelity. These are three fixed prompts, not a statistical quality benchmark or a guarantee of exact scene rendering. The app additionally dims and blurs the generated scenes.

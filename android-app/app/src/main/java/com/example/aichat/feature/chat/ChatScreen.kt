@@ -709,6 +709,7 @@ internal fun ChatScreenContent(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 ChatHeader(

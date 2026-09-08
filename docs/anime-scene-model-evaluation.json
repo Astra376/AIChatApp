@@ -1,0 +1,65 @@
+{
+  "run": "anime_scenes_20260908_v1",
+  "results": [
+    {
+      "id": "forest_klein4",
+      "label": "forest / Klein 4B anime",
+      "requestedModel": "black-forest-labs/flux.2-klein-4b",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_forest_klein4.jpg",
+      "model": "black-forest-labs/flux.2-klein-4b",
+      "cost": 0.015,
+      "durationMs": 5068
+    },
+    {
+      "id": "cafe_klein4",
+      "label": "cafe / Klein 4B anime",
+      "requestedModel": "black-forest-labs/flux.2-klein-4b",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_cafe_klein4.jpg",
+      "model": "black-forest-labs/flux.2-klein-4b",
+      "cost": 0.015,
+      "recovered": true
+    },
+    {
+      "id": "cafe_nano",
+      "label": "cafe / previous Gemini anime",
+      "requestedModel": "google/gemini-3.1-flash-image",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_cafe_nano.jpg",
+      "model": "google/gemini-3.1-flash-image",
+      "cost": 0.068503,
+      "durationMs": 10852
+    },
+    {
+      "id": "forest_nano",
+      "label": "forest / previous Gemini anime",
+      "requestedModel": "google/gemini-3.1-flash-image",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_forest_nano.jpg",
+      "model": "google/gemini-3.1-flash-image",
+      "cost": 0.0684125,
+      "recovered": true
+    },
+    {
+      "id": "room_klein4",
+      "label": "room / Klein 4B anime",
+      "requestedModel": "black-forest-labs/flux.2-klein-4b",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_room_klein4.jpg",
+      "model": "black-forest-labs/flux.2-klein-4b",
+      "cost": 0.015,
+      "durationMs": 3646
+    },
+    {
+      "id": "room_nano",
+      "label": "room / previous Gemini anime",
+      "requestedModel": "google/gemini-3.1-flash-image",
+      "status": "completed",
+      "imageUrl": "https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Fanime_scenes_20260908_v1_room_nano.jpg",
+      "model": "google/gemini-3.1-flash-image",
+      "cost": 0.0685335,
+      "durationMs": 11388
+    }
+  ]
+}

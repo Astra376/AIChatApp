@@ -7,7 +7,7 @@ import { all } from "../../db/client";
 
 export type InterestSignal = { character_id: string; turns: number; days: number; sessions: number; last_at: number; liked: number };
 type Category = { id: string; title: string; ids: string[] };
-export type DiscoverySnapshot = { version: string; createdAt: number; turnCount: number; likedAt: number; ids: string[]; categories: Category[] };
+export type DiscoverySnapshot = { taxonomyVersion?: number; version: string; createdAt: number; turnCount: number; likedAt: number; ids: string[]; categories: Category[] };
 const DAY = 86_400_000;
 const ready = new WeakMap<object, Promise<unknown>>();
 const facets: Array<[string, string, RegExp]> = [
@@ -24,7 +24,12 @@ const facets: Array<[string, string, RegExp]> = [
   ["reserved", "Quiet & mysterious", /\b(quiet|reserved|shy|introvert\w*|mysterious|stoic|enigmatic|aloof)\b/i],
   ["rivals", "Rivals & tension", /\b(rival\w*|enemies.to.lovers|tsundere|competitive|antagonist|villain)\b/i],
   ["anime", "Anime & manga", /\b(anime|manga|otaku|shonen|shoujo|isekai)\b/i],
-  ["history", "Historical stories", /\b(historical|victorian|medieval|ancient|regency|royal|emperor|princess|prince|queen|king)\b/i]
+  ["history", "Historical stories", /\b(historical|victorian|medieval|ancient|regency|royal|emperor|princess|prince|queen|king)\b/i],
+  ["academy", "Academies & school life", /\b(academy|campus|student|professor|classmate|boarding.school)\b/i],
+  ["found-family", "Found family", /\b(found.family|chosen.family|adopted|unlikely.friends)\b/i],
+  ["pirates", "Pirates & seafaring", /\b(pirate|pirates|seafar\w*|sailing|buccaneer)\b/i],
+  ["dystopia", "Dystopian worlds", /\b(dystopi\w*|apocalyps\w*|post.apocalyptic|wasteland|survival)\b/i],
+  ["cozy", "Cozy companionship", /\b(cozy|cosy|wholesome|comforting|peaceful|gentle)\b/i]
 ];
 const stop = new Set("the and with that this from your you are for has her his she him their they who but not into have will can about just character chat personality story user also very one all its our an as is of to in on a i it be my me at or by so he we was lives always never".split(" "));
 export function publicTerms(c: CharacterRecord): string[] {
@@ -90,15 +95,8 @@ export function buildDiscovery(catalog: CharacterRecord[], signals: InterestSign
     const affinity=members.reduce((n,c)=>n+(weights.get(c.id) ?? 0),0);
     return {id,title,ids:diversify(members),rank:affinity+Math.log1p(members.length)*.4};
   }).filter(c=>c.ids.length>=2).sort((a,b)=>b.rank-a.rank||a.id.localeCompare(b.id));
-  // Public vocabulary supplies catalog-specific genres beyond the base taxonomy.
-  const usedTitles=new Set(candidates.map(c=>c.title.toLowerCase()));
-  [...preferences.entries()].sort((a,b)=>b[1]-a[1]).slice(0,24).forEach(([term,value])=>{
-    const members=catalog.filter(c=>terms.get(c.id)?.includes(term));
-    if(members.length<3 || members.length>catalog.length*.6 || usedTitles.has(term)) return;
-    const id=`theme-${term}`, title=term.charAt(0).toUpperCase()+term.slice(1);
-    if(candidates.some(c=>c.ids.length===members.length && members.every(m=>c.ids.includes(m.id)))) return;
-    candidates.push({id,title,ids:diversify(members),rank:value/preferenceNorm}); usedTitles.add(term);
-  });
+  // Only meaningful genres, relationship themes and personality types become shelves.
+  // Description vocabulary still informs ranking, but never becomes a UI label.
   candidates.sort((a,b)=>b.rank-a.rank||a.id.localeCompare(b.id));
   const selected=candidates.slice(0,8);
   // Hysteresis: retain useful shelves and their order while admitting at most
@@ -106,7 +104,7 @@ export function buildDiscovery(catalog: CharacterRecord[], signals: InterestSign
   const priorIds=previous?.categories.map(c=>c.id).filter(id=>id!=="for-you") ?? [];
   const retained=priorIds.map(id=>candidates.find(c=>c.id===id)).filter((c): c is typeof candidates[number]=>!!c && (selected.includes(c)||c.rank>.5)).slice(0,6);
   const shelves=[...retained,...selected.filter(c=>!retained.some(p=>p.id===c.id))].slice(0,8);
-  return {version:String(now),createdAt:now,turnCount:signals.reduce((n,s)=>n+s.turns,0),likedAt:0,ids,
+  return {taxonomyVersion:2,version:String(now),createdAt:now,turnCount:signals.reduce((n,s)=>n+s.turns,0),likedAt:0,ids,
     categories:[{id:"for-you",title:"For you",ids},...shelves.map(({id,title,ids})=>({id,title,ids}))]};
 }
 async function ensure(context: RequestContext) {
@@ -125,9 +123,9 @@ async function snapshot(context:RequestContext, version?: string):Promise<Discov
   const stored=await context.env.DB.prepare(`SELECT snapshot_json FROM discovery_snapshots WHERE user_id=? ${version ? "AND version=?" : ""} ORDER BY created_at DESC LIMIT 1`)
     .bind(...(version?[userId,version]:[userId])).first<{snapshot_json:string}>();
   const previous=stored?JSON.parse(stored.snapshot_json) as DiscoverySnapshot:undefined;
-  if(version) {if(previous) return previous;throw new AppError(410,"DISCOVERY_EXPIRED","Refresh Discover to see your latest categories.");}
+  if(version) {if(previous) return {...previous, categories: previous.categories.filter(c => c.id === "for-you" || facets.some(([id]) => id === c.id))};throw new AppError(410,"DISCOVERY_EXPIRED","Refresh Discover to see your latest categories.");}
   // Open/close is a read of persistent user data; no ranking/model call on every open.
-  if(previous && Date.now()-previous.createdAt<30*60_000) return previous;
+  if(previous?.taxonomyVersion === 2 && Date.now()-previous.createdAt<30*60_000) return previous;
   const signals=await all<InterestSignal>(context.env.DB.prepare(`
     WITH activity AS (
       SELECT c.character_id,COUNT(m.id) AS turns,COUNT(DISTINCT CAST(m.created_at/86400000 AS INTEGER)) AS days,
@@ -141,7 +139,7 @@ async function snapshot(context:RequestContext, version?: string):Promise<Discov
     LEFT JOIN character_likes l ON l.character_id=i.character_id AND l.user_id=?
   `).bind(userId,userId,userId));
   const turnCount=signals.reduce((n,s)=>n+s.turns,0),likedAt=Math.max(0,...signals.filter(s=>s.liked).map(s=>s.last_at));
-  if(previous && Date.now()-previous.createdAt<6*60*60_000 && turnCount-previous.turnCount<8 && likedAt<=previous.likedAt) return previous;
+  if(previous?.taxonomyVersion === 2 && Date.now()-previous.createdAt<6*60*60_000 && turnCount-previous.turnCount<8 && likedAt<=previous.likedAt) return previous;
   const catalog=await getPublicFeed(context.env,userId,0,2000);
   const anchors=signals.filter(s=>s.turns>=3 || s.liked).sort((a,b)=>interestWeight(b,Date.now())-interestWeight(a,Date.now())).slice(0,12).map(s=>s.character_id);
   const peers=anchors.length?await all<{character_id:string; affinity:number}>(context.env.DB.prepare(`

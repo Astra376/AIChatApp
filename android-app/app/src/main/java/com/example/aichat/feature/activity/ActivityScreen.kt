@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -53,7 +53,6 @@ fun ActivityRoute(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
-    val showLoading = com.example.aichat.core.ui.rememberDelayedLoading(state.loading)
     ScreenBackgroundBox {
         Box(Modifier.fillMaxSize()) {
             LazyColumn(
@@ -69,7 +68,7 @@ fun ActivityRoute(
                         if (state.items.isNotEmpty()) TextButton(onClick = viewModel::clearAll) { Text("Clear all") }
                     }
                 }
-                if (showLoading && state.items.isEmpty()) item {
+                if (state.loading && state.items.isEmpty()) item {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
                 }
                 if (!state.loading && state.items.isEmpty()) item {

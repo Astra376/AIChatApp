@@ -15,6 +15,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
@@ -70,14 +73,32 @@ private fun AppearanceImage(id: String, url: String?, modifier: Modifier, descri
     if (url != null) AsyncImage(model = request, contentDescription = description, contentScale = ContentScale.Crop, modifier = modifier)
 }
 
+/** Uploaded/generated pattern tiles repeat instead of being stretched over the screen. */
+@Composable
+private fun AppearancePatternImage(id: String, url: String?, modifier: Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val request = androidx.compose.runtime.remember(id, url) {
+        coil.request.ImageRequest.Builder(context).data(url).size(512)
+            .memoryCacheKey("pattern:$id").diskCacheKey("appearance:$id")
+            .allowHardware(false).crossfade(false).build()
+    }
+    val painter = coil.compose.rememberAsyncImagePainter(request)
+    val drawable = (painter.state as? coil.compose.AsyncImagePainter.State.Success)?.result?.drawable
+    val brush = androidx.compose.runtime.remember(drawable) {
+        drawable?.let { androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(
+            it.toBitmap().asImageBitmap(), androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)) }
+    }
+    Canvas(modifier) { brush?.let { drawRect(it) } }
+}
+
 @Composable
 fun AppearanceBackdrop(preferences: AppearanceDto, modifier: Modifier = Modifier) {
     val base = MaterialTheme.colorScheme.background
     Box(modifier) {
         if (preferences.background == "image") {
-            AppearanceImage(preferences.backgroundId, preferences.backgroundUrl, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(base.copy(alpha = .72f)))
-        } else if (preferences.background != "default") PresetArtwork(preferences.background, Modifier.fillMaxSize())
+            AppearancePatternImage(preferences.backgroundId, preferences.backgroundUrl, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(base.copy(alpha = if (base.luminance() < .5f) .78f else .88f)))
+        } else BackgroundPattern(preferences.background, Modifier.fillMaxSize())
     }
 }
 @Composable
@@ -85,9 +106,9 @@ fun ProfileBackdrop(appearance: AppearanceDto, modifier: Modifier = Modifier) {
     if (appearance.profileBackgroundId.isEmpty()) return
     val preset = appearancePreset(appearance.profileBackgroundId)
     Box(modifier) {
-        if (preset != null) PresetArtwork(preset, Modifier.fillMaxSize())
-        else AppearanceImage(appearance.profileBackgroundId, appearance.profileBackgroundUrl, Modifier.fillMaxSize(), "Profile background")
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = .45f)))
+        if (preset != null) BackgroundPattern(preset, Modifier.fillMaxSize())
+        else AppearancePatternImage(appearance.profileBackgroundId, appearance.profileBackgroundUrl, Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = if (preset != null) .15f else if (MaterialTheme.colorScheme.background.luminance() < .5f) .78f else .88f)))
     }
 }
 

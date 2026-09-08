@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.CircularProgressIndicator
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
@@ -58,7 +58,7 @@ fun CharacterSummaryCard(
                 avatarUrl = character.avatarUrl,
                 modifier = Modifier.fillMaxSize()
             )
-            if (rememberDelayedLoading(isOpening)) {
+            if (isOpening) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center).size(36.dp)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),
@@ -78,7 +78,7 @@ fun CharacterSummaryCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 0.dp, top = 8.dp, end = 12.dp, bottom = 12.dp)
+                .padding(start = 0.dp, top = 8.dp, end = 12.dp, bottom = if (compact) 0.dp else 12.dp)
         ) {
             Text(
                 text = character.name,

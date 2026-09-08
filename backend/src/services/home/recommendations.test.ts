@@ -28,6 +28,23 @@ describe("personal discovery", () => {
     expect(next.categories.map(c => c.id)).toEqual(first.categories.map(c => c.id));
     expect(new Set(next.ids).size).toBe(catalog.length);
   });
+  it("rejects appearance words as categories and refreshes the previous taxonomy", async () => {
+    const catalog = [character("a", "green eyes gentle pirate"), character("b", "green eyes pirate"),
+      character("c", "green eyes seafaring"), character("d", "robot"), character("e", "wizard"), character("f", "detective")];
+    const result = buildDiscovery(catalog, [signal], new Map(), now);
+    expect(result.categories.some(c => c.title === "Green" || c.id.startsWith("theme-"))).toBe(false);
+    expect(result.categories.some(c => c.id === "pirates")).toBe(true);
+    const db = database();
+    try {
+      await discover(db.context());
+      const row = db.sqlite.prepare("SELECT * FROM discovery_snapshots LIMIT 1").get() as any;
+      const stale = JSON.parse(row.snapshot_json);
+      delete stale.taxonomyVersion;
+      stale.categories.push({id: "theme-green", title: "Green", ids: stale.ids});
+      db.sqlite.prepare("UPDATE discovery_snapshots SET snapshot_json=?").run(JSON.stringify(stale));
+      expect((await discover(db.context())).categories.some(c => c.id === "theme-green")).toBe(false);
+    } finally { db.sqlite.close(); }
+  });
   it("uses semantic relatedness when vocabulary differs", () => {
     const catalog = [character("unrelated", "robot motor"), character("a", "mage forest"), character("semantic", "sorceress woodland")];
     const data = buildDiscovery(catalog, [signal], new Map(), now, undefined,

@@ -68,11 +68,21 @@ jobs:
       - name: Install Android platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Fetch verified transparent image fixture
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
         run: |
           mkdir -p android-app/app/build/generated/image-fixtures
           curl --fail --silent --show-error --retry 2 --max-time 30 'https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Ftransparent_body_20260907_v1_anime_gpt.png' -o android-app/app/build/generated/image-fixtures/character-body.png
           echo '15a68e802ce848f3d2ca50013350b49a94510fa87bc3cd8d12689928fbc4396f  android-app/app/build/generated/image-fixtures/character-body.png' | sha256sum --check
+      - name: Build requested quick phone APK
+        if: contains(github.event.head_commit.message, '[quick-preview]')
+        working-directory: android-app
+        run: >-
+          bash ./gradlew --no-daemon --max-workers=2 assembleRelease
+          -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
+          -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
       - name: Test and build phone APK
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
         working-directory: android-app
         run: >-
           bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleRelease assembleDebugAndroidTest
@@ -80,11 +90,13 @@ jobs:
           -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
           -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
       - name: Enable emulator acceleration
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Check changed interactions on Android
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
         env:
           FULL_UI_TESTS: ${{ inputs.full_ui_tests }}
         uses: reactivecircus/android-emulator-runner@v2

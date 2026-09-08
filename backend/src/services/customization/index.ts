@@ -141,10 +141,10 @@ export async function generateAppearance(context: RequestContext, input: {kind:s
   // Paid submissions are idempotent; failed submissions require an explicit new request.
   const acquired = await context.env.DB.prepare(`INSERT INTO appearance_jobs(id,user_id,started_at,fingerprint) SELECT ?,?,?,? WHERE (SELECT COUNT(*) FROM appearance_jobs WHERE user_id=? AND started_at>?)<10 ON CONFLICT(id) DO NOTHING`).bind(id,context.user!.userId,Date.now(),fingerprint,context.user!.userId,Date.now()-86_400_000).run();
   assert(acquired.meta.changes===1,429,"IMAGE_BUSY","This image is being prepared, or today's generation limit was reached.");
-  const prompt = input.kind==="icon" ? `Premium app icon. One bold centered symbol, clean silhouette, no lettering, generous safe margins. ${input.prompt}` : `Tasteful atmospheric ${input.kind}, uncluttered composition, no text, readable behind app content. ${input.prompt}`;
+  const prompt = input.kind==="icon" ? `Premium app icon. One bold centered symbol, clean silhouette, no lettering, generous safe margins. ${input.prompt}` : input.kind === "background" ? `Seamlessly tileable repeating wallpaper pattern for a full-screen app background. Small evenly spaced motifs, subtle low contrast, restrained two-tone palette, matching opposite edges, flat illustration. No central subject, scenery, perspective, gradients, lettering or borders. Theme: ${input.prompt}` : `Tasteful atmospheric ${input.kind}, uncluttered composition, no text, readable behind app content. ${input.prompt}`;
   const image = await generateImageWithFallback(context.env, {
     model: input.kind === "icon" ? IMAGE_MODELS.nano : context.env.OPENROUTER_BACKGROUND_MODEL || IMAGE_MODELS.nano,
-    prompt, aspectRatio: input.kind === "icon" ? "1:1" : "9:16"
+    prompt, aspectRatio: input.kind === "banner" ? "9:16" : "1:1"
   });
   return saveAsset(context, id, input.kind, image.bytes);
 }

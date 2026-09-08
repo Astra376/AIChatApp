@@ -22,7 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material3.CircularProgressIndicator
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
@@ -241,11 +241,6 @@ fun NewHomeRoute(
                     ) {
                         item {
                             CreateStoryNode(onClick = onOpenStudio)
-                        }
-                        if (state.isFeedLoading && state.recentChats.isEmpty()) {
-                            items(3) {
-                                StoryNodePlaceholder()
-                            }
                         }
                         items((state.unreadChats + state.recentChats).distinctBy { it.characterId }, key = { it.characterId }) { chat ->
                             StoryNode(
@@ -552,7 +547,7 @@ fun TopPickCard(
                 modifier = Modifier.fillMaxSize(),
                 alignment = BiasAlignment(0f, -0.8f)
             )
-            if (com.example.aichat.core.ui.rememberDelayedLoading(isOpening)) {
+            if (isOpening) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center).size(36.dp)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),

@@ -18,7 +18,7 @@ data class DiscoveryCategoryDto(val id: String, val title: String, val total: In
 
 @Singleton
 class DiscoveryRepository @Inject constructor(@ApplicationContext context: Context, private val api: HomeApi) {
-    private val preferences = context.getSharedPreferences("discovery-previews", Context.MODE_PRIVATE)
+    private val preferences = context.getSharedPreferences("discovery-previews-v2", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
     fun cached(userId: String): DiscoveryDto? = runCatching {
         preferences.getString(userId, null)?.let { json.decodeFromString<DiscoveryDto>(it) }

@@ -1,41 +1,32 @@
 package com.example.aichat.core.ui
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
-import androidx.compose.runtime.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarState
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.layout.layout
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class ScrollChromeState : NestedScrollConnection {
-    var visible by mutableStateOf(true)
-    private var distance = 0f
-    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-        if (source == NestedScrollSource.UserInput && abs(available.y) > abs(available.x)) {
-            if (distance * available.y < 0) distance = 0f
-            distance += available.y
-            if (abs(distance) > 16f) { visible = distance > 0; distance = 0f }
-        }
-        return Offset.Zero
-    }
-}
-
+/** Material owns drag, fling and spring settling; both bars follow its one offset. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun rememberScrollChrome(): ScrollChromeState = remember { ScrollChromeState() }
+fun rememberScrollChrome() = TopAppBarDefaults.enterAlwaysScrollBehavior(
+    snapAnimationSpec = spring(dampingRatio = .85f, stiffness = Spring.StiffnessMediumLow)
+)
 
-/** The bar is measured at its natural size, then slides while releasing its space. */
+/** Adapts our compact header/navigation content to Material's scroll state. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScrollChromeBar(state: ScrollChromeState, top: Boolean, content: @Composable () -> Unit) {
-    val fraction by animateFloatAsState(if (state.visible) 1f else 0f, tween(180), label = "scroll-chrome")
+fun ScrollChromeBar(state: TopAppBarState, top: Boolean, content: @Composable () -> Unit) {
     Box(Modifier.clipToBounds().layout { measurable, constraints ->
         val child = measurable.measure(constraints.copy(minHeight = 0))
-        val height = (child.height * fraction).roundToInt()
+        if (top) state.heightOffsetLimit = -child.height.toFloat()
+        val height = (child.height * (1f - state.collapsedFraction)).roundToInt()
         layout(child.width, height) { child.placeRelative(0, if (top) height - child.height else 0) }
     }) { content() }
 }

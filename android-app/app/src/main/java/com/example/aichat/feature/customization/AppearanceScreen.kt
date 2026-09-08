@@ -111,7 +111,7 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
                 item { FrameChoices(draft.frame, !busy) { viewModel.edit(draft.copy(frame = it)) } }
                 item { PresetChoices("Profile banner", appearancePreset(draft.bannerId) ?: if (draft.bannerId.isEmpty()) "none" else "custom", !busy, includeNone = true) { viewModel.edit(draft.copy(bannerId = if (it == "none") "" else "preset:$it", bannerUrl = null)) } }
                 item { ImageActions("Profile banner",busy,onUpload={uploadTarget="banner";picker.launch("image/*")},onGenerate={generationTarget="banner"},onClear={viewModel.edit(draft.copy(bannerId="",bannerUrl=null))}) }
-                item { PresetChoices("Profile background", appearancePreset(draft.profileBackgroundId) ?: if (draft.profileBackgroundId.isEmpty()) "none" else "custom", !busy, includeNone = true) { viewModel.edit(draft.copy(profileBackgroundId = if (it == "none") "" else "preset:$it", profileBackgroundUrl = null)) } }
+                item { PresetChoices("Profile background", appearancePreset(draft.profileBackgroundId) ?: if (draft.profileBackgroundId.isEmpty()) "none" else "custom", !busy, includeNone = true, patterns = true) { viewModel.edit(draft.copy(profileBackgroundId = if (it == "none") "" else "preset:$it", profileBackgroundUrl = null)) } }
                 item { ImageActions("Profile background",busy,onUpload={uploadTarget="profile";picker.launch("image/*")},onGenerate={generationTarget="profile"},onClear={viewModel.edit(draft.copy(profileBackgroundId="",profileBackgroundUrl=null))}) }
                 item { Text("Featured character",style=MaterialTheme.typography.titleMedium); Text("Choose a public character you created.",style=MaterialTheme.typography.bodySmall) }
                 item { LazyRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) { item { FilterChip(selected=draft.featuredCharacterId.isEmpty(),onClick={viewModel.edit(draft.copy(featuredCharacterId=""))},label={Text("None")},enabled=!busy) }; items(characters,key={it.id}) { c -> FilterChip(selected=draft.featuredCharacterId==c.id,onClick={viewModel.edit(draft.copy(featuredCharacterId=c.id))},label={Text(c.name)},enabled=!busy) } } }
@@ -121,7 +121,7 @@ fun AppearanceRoute(onBack: ()->Unit, onUpgradeUltra: ()->Unit = {}, viewModel: 
                 }
                 item { HorizontalDivider(); Text("App background",style=MaterialTheme.typography.titleLarge) }
                 item { Box(Modifier.fillMaxWidth().height(150.dp)) { AppearanceBackdrop(draft,Modifier.fillMaxSize()); Surface(modifier=Modifier.align(Alignment.Center),shape=RoundedCornerShape(20.dp),color=MaterialTheme.colorScheme.surface.copy(alpha=.9f)) { Text("A little more you",Modifier.padding(16.dp)) } } }
-                item { PresetChoices("Choose a background", draft.background, !busy) { viewModel.edit(draft.copy(background = it)) } }
+                item { PresetChoices("Choose a background", draft.background, !busy, patterns = true) { viewModel.edit(draft.copy(background = it)) } }
                 item { ImageActions("Custom background",busy,onUpload={uploadTarget="background";picker.launch("image/*")},onGenerate={generationTarget="background"},onClear={viewModel.edit(draft.copy(background="default",backgroundId="",backgroundUrl=null))}) }
                 item { HorizontalDivider(); Text("App icon",style=MaterialTheme.typography.titleLarge) }
                 item { IconChoices(draft.icon, !busy) { viewModel.edit(draft.copy(icon = it)) } }
@@ -185,13 +185,15 @@ private fun ImageActions(
 }
 
 @Composable
-internal fun PresetChoices(title: String, selected: String, enabled: Boolean, includeNone: Boolean = false, onChoose: (String) -> Unit) {
+internal fun PresetChoices(title: String, selected: String, enabled: Boolean, includeNone: Boolean = false, patterns: Boolean = false, onChoose: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(title, style = MaterialTheme.typography.titleSmall)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items((if (includeNone) listOf("none") else emptyList()) + appearancePresets) { key ->
                 PresetTile(key, selected == key, enabled, { onChoose(key) }) {
-                    if (key != "none") PresetArtwork(key, Modifier.fillMaxSize())
+                    if (key != "none") {
+                        if (patterns) BackgroundPattern(key, Modifier.fillMaxSize()) else PresetArtwork(key, Modifier.fillMaxSize())
+                    }
                     else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("None", style = MaterialTheme.typography.labelMedium) }
                 }
             }

@@ -57,3 +57,14 @@ Six fixed image requests compared the new Klein 4B model with the previous Gemin
 | Castle bedroom at sunrise | $0.015 | $0.0685335 |
 
 All six completed. Both models rendered illustrated anime environments; Klein preserved the requested broad setting, lighting and key objects at approximately 78% lower image cost. Both cafe images added an extra chair, so the comparison does not establish exact object-count fidelity. These are three fixed prompts, not a statistical quality benchmark or a guarantee of exact scene rendering. The app additionally dims and blurs the generated scenes.
+
+
+### Discover and appearance follow-up
+
+Discover now uses compact category spacing, adjacent chevrons and full-row header hit targets. Its native exposed dropdown spans the category page and centers both its selected label and choices. Category labels come exclusively from meaningful genres, relationship themes and personality types; behavioral ranking still selects and orders them for each account. Taxonomy version 2 refreshes older saved shelves so arbitrary labels such as Green disappear immediately.
+
+The compact header and navigation bar now share Material 3's enter-always scroll behavior, including its native drag, fling and spring settling. The system inset strips are painted with the app background color. The loading gate resets for every request, delays 400 ms, and fades the entire indicator (including its background) over 180 ms. Empty recent chats no longer display placeholders tied to an unrelated feed request.
+
+App/profile presets use small repeating dots, waves, geometric marks, floral motifs or graph lines with theme-specific subdued colors. Banners retain their separate artwork. Custom backgrounds repeat as tiles, with theme-aware dimming, and generated backgrounds request seamless patterns.
+
+This explicitly requested quick preview uses the `[quick-preview]` commit marker: the workflow validates the backend and compiles/packages the release APK, without running the unrelated Android emulator suite. Full Android checks remain the default for other commits.

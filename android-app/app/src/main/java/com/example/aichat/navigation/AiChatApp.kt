@@ -331,14 +331,14 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
     val chats by chatListViewModel.uiState.collectAsStateWithLifecycle()
     val unread = chats.conversations.sumOf { it.unreadCount }
     val chrome = rememberScrollChrome()
-    LaunchedEffect(pager.settledPage) { chrome.visible = true }
+    LaunchedEffect(pager.settledPage) { chrome.state.heightOffset = 0f }
     Scaffold(
-        modifier = Modifier.nestedScroll(chrome),
+        modifier = Modifier.nestedScroll(chrome.nestedScrollConnection),
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             val background = MaterialTheme.colorScheme.background
-            Column(Modifier.statusBarsPadding()) { ScrollChromeBar(chrome, top = true) {
+            Column(Modifier.background(MaterialTheme.colorScheme.background).statusBarsPadding()) { ScrollChromeBar(chrome.state, top = true) {
                 MainPageHeader(
                     title = current.contentDescription,
                     onOpenSearch = { onOpen("search") }, onOpenActivity = { onOpen("activity") },
@@ -352,7 +352,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
             }
         },
         bottomBar = {
-            Column(Modifier.navigationBarsPadding()) { ScrollChromeBar(chrome, top = false) { NavigationBar(
+            Column(Modifier.background(MaterialTheme.colorScheme.background).navigationBarsPadding()) { ScrollChromeBar(chrome.state, top = false) { NavigationBar(
                 containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
                 windowInsets = WindowInsets(0, 0, 0, 0),
                 modifier = Modifier.height(AppChrome.bottomBarHeight)

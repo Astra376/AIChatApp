@@ -1,6 +1,9 @@
 package com.example.aichat.feature.home
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -40,7 +43,7 @@ data class DiscoveryState(
 
 @HiltViewModel
 class DiscoveryViewModel @Inject constructor(
-    savedState: SavedStateHandle, auth: AuthRepository,
+    private val savedState: SavedStateHandle, auth: AuthRepository,
     private val repository: DiscoveryRepository, private val conversations: ConversationRepository
 ) : ViewModel() {
     private val userId = auth.sessionState.value.profile?.userId.orEmpty()
@@ -64,6 +67,7 @@ class DiscoveryViewModel @Inject constructor(
     }
     fun select(id: String) {
         val data = mutable.value.discovery ?: return
+        savedState["categoryId"] = id
         job?.cancel()
         job = viewModelScope.launch { loadCategory(id, data) }
     }
@@ -92,6 +96,7 @@ class DiscoveryViewModel @Inject constructor(
     suspend fun ensureConversation(id: String) = conversations.ensureConversation(userId, id)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoveryRoute(paddingValues: PaddingValues = PaddingValues(), onOpenCategory: (String) -> Unit = {},
     onOpenConversation: (String) -> Unit, onBack: (() -> Unit)? = null, viewModel: DiscoveryViewModel = hiltViewModel()) {
@@ -102,14 +107,17 @@ fun DiscoveryRoute(paddingValues: PaddingValues = PaddingValues(), onOpenCategor
     LifecycleResumeEffect(viewModel) { viewModel.refresh(); onPauseOrDispose {} }
     ScreenBackgroundBox(snackbarHostState = snackbar) {
         if (onBack == null) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = screenContentPadding(paddingValues), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = screenContentPadding(paddingValues), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (loading && state.discovery == null) items(3) { CharacterSummaryCardPlaceholder(Modifier.fillMaxWidth(), imageAspectRatio = 3f) }
                 state.discovery?.categories?.forEach { section ->
                     item(key = section.id) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(section.title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                                IconButton(onClick = { onOpenCategory(section.id) }) { AppIcon(AppIcons.categoryArrow, "View all ${section.title}") }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "View all ${section.title}") {
+                                onOpenCategory(section.id)
+                            }.heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(section.title, style = MaterialTheme.typography.titleLarge)
+                                AppIcon(AppIcons.categoryArrow, null, size = 18.dp)
                             }
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(section.items, key = { it.id }) { item ->
@@ -129,21 +137,37 @@ fun DiscoveryRoute(paddingValues: PaddingValues = PaddingValues(), onOpenCategor
             LazyVerticalGrid(columns = GridCells.Fixed(3), modifier = Modifier.fillMaxSize(), contentPadding = screenContentPadding(paddingValues),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        AppBackButton(onBack)
-                        Box(Modifier.weight(1f)) {
-                            OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-                                Text(selected?.title ?: "Discover", Modifier.weight(1f))
-                                AppIcon(AppIcons.categoryDown, "Choose category", size = 20.dp)
-                            }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text("Discover", style = MaterialTheme.typography.titleLarge)
+                            Box(Modifier.align(Alignment.CenterStart)) { AppBackButton(onBack) }
+                        }
+                        ExposedDropdownMenuBox(expanded = menu, onExpandedChange = { menu = it }) {
+                            OutlinedTextField(
+                                value = selected?.title ?: "Choose a category", onValueChange = {}, readOnly = true,
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
+                                singleLine = true, shape = RoundedCornerShape(14.dp),
+                                leadingIcon = { Spacer(Modifier.size(24.dp)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = menu) },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface)
+                            )
+                            ExposedDropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 state.discovery?.categories?.forEach { section ->
-                                    DropdownMenuItem(text = { Text(section.title) }, onClick = { menu = false; viewModel.select(section.id) })
+                                    DropdownMenuItem(
+                                        text = { Text(section.title, Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                        onClick = { menu = false; viewModel.select(section.id) },
+                                        colors = MenuDefaults.itemColors(textColor = if (section.id == selected?.id)
+                                            MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                    )
                                 }
                             }
                         }
                     }
                 }
+
                 val items = state.items.ifEmpty { selected?.items?.map { it.toEntity().toModel() }.orEmpty() }
                 items(items, key = { it.id }) { item ->
                     CharacterSummaryCard(item, Modifier.fillMaxWidth(), imageAspectRatio = .85f, compact = true,

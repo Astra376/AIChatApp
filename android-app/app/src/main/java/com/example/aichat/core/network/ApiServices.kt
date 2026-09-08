@@ -78,6 +78,12 @@ interface CharacterApi {
 }
 
 interface HomeApi {
+    @GET("v1/home/discover")
+    suspend fun discover(): com.example.aichat.feature.home.DiscoveryDto
+
+    @GET("v1/home/discover/{categoryId}")
+    suspend fun discoverCategory(@Path("categoryId") id: String, @Query("version") version: String, @Query("cursor") cursor: String?): CursorPageDto<CharacterDto>
+
     @GET("v1/home/trending")
     suspend fun trendingSearches(): TrendingSearchesResponseDto
 

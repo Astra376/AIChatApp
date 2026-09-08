@@ -1,5 +1,7 @@
 package com.example.aichat.feature.character
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.clickable
@@ -17,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState

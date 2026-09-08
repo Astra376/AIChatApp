@@ -1,3 +1,4 @@
+import { conversationBackground } from "../services/images/scenes";
 import { evaluateImage } from "../services/images/evaluation";
 import { generateCharacterPortrait, generateChatBackground, uploadCharacterPortrait } from "../services/images";
 import { json } from "../lib/response";
@@ -26,7 +27,8 @@ export const imageRoutes: RouteDefinition[] = [
     path: "/v1/images/generate-chat-background",
     auth: true,
     handler: async (context) => {
-      const body = await parseJson<{ prompt?: string; requestKey?: string }>(context.request);
+      const body = await parseJson<{ prompt?: string; requestKey?: string; conversationId?: string }>(context.request);
+      if (body.conversationId) return json(await conversationBackground(context, requireString(body.conversationId, "conversationId", 200)));
       return json(await generateChatBackground(
         context,
         requireString(body.prompt, "prompt", 2_000),

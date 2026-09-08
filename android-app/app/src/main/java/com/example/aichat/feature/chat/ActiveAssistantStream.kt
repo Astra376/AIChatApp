@@ -19,6 +19,7 @@ data class ActiveAssistantStream(
     val runId: String? = null,
     val mode: ActiveStreamMode,
     val assistantMessageId: String? = null,
+    val regenerationId: String? = null,
     val targetMessageId: String? = null,
     val userMessageId: String? = null,
     val text: String = "",

@@ -251,15 +251,26 @@ internal fun CharacterMemoryScreen(
 
 @Composable
 private fun SceneMemory(scene: MemorySceneDto) {
-    if (scene.summary.isBlank() && scene.location.isNullOrBlank() && scene.fictionalTime.isNullOrBlank() && scene.timeline.isEmpty()) { Text("Scene details will appear as your conversation develops.", style = MaterialTheme.typography.bodyMedium); return }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (scene.summary.isNotBlank()) Text(scene.summary, style = MaterialTheme.typography.bodyMedium)
-        scene.location?.takeIf { it.isNotBlank() }?.let { Text("Location · $it", style = MaterialTheme.typography.bodySmall) }
-        scene.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text("Story time · $it", style = MaterialTheme.typography.bodySmall) }
-        scene.timeline.forEach { event ->
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                event.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                Text(event.text, style = MaterialTheme.typography.bodyMedium)
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                com.example.aichat.core.design.AppIcon(com.example.aichat.core.design.AppIcons.discoverOutline, null, size = 28.dp)
+                Text(scene.location?.takeIf { it.isNotBlank() } ?: "Your current scene", style = MaterialTheme.typography.titleLarge)
+                scene.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
+                Text(scene.summary.ifBlank { "The setting and story timeline will appear here as your conversation develops." }, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (scene.timeline.isNotEmpty()) {
+            Text("Story so far", style = MaterialTheme.typography.titleMedium)
+            scene.timeline.asReversed().forEachIndexed { index, event ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("${scene.timeline.size - index}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 2.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        event.fictionalTime?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Text(event.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                if (index < scene.timeline.lastIndex) androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .4f))
             }
         }
     }

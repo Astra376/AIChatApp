@@ -25,7 +25,7 @@ fun LoadingScreen(paddingValues: PaddingValues = PaddingValues()) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        CircularProgressIndicator()
+        if (rememberDelayedLoading(true)) CircularProgressIndicator()
     }
 }
 

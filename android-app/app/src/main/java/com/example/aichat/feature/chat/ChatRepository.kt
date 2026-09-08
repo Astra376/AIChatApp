@@ -952,6 +952,9 @@ class ChatRepository @Inject constructor(
         draftKey: String,
         event: ChatStreamEvent.CompletedRegenerate
     ) {
+        // Publish the committed identity before Room can emit the appended variant.
+        // The UI keeps the draft slot until its independent text reveal finishes.
+        updateActiveStream(conversationId, draftKey) { it.copy(regenerationId = event.regeneration.id) }
         database.withTransaction {
             regenerationDao.insert(
                 AssistantRegenerationEntity(

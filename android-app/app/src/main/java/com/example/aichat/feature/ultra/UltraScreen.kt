@@ -1,5 +1,7 @@
 package com.example.aichat.feature.ultra
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.LazyColumn

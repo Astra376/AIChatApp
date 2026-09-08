@@ -33,26 +33,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
-class ChatScreenContentTest {
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35], qualifiers = "w411dp-h891dp", application = android.app.Application::class)
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+class ChatScreenHostTest {
     @get:Rule
     val composeRule = createComposeRule()
-
-    @Test
-    fun chatChromeScreenshot() {
-        val state = ChatUiState(conversation = conversationDetail(listOf(
-            message(0, "How was your day?").copy(role = MessageRole.USER),
-            message(1, "*I settle into the chair, smiling.*\n\n\"Better now you're here. How about yours?\"")
-        )))
-        composeRule.setContent { TestChat(state, themeMode = ThemeMode.DARK) }
-        composeRule.waitForIdle()
-        // Connected tests can remove app-owned files during cleanup. Native
-        // screencap writes the fixture to shell storage that CI can still pull.
-        android.os.ParcelFileDescriptor.AutoCloseInputStream(
-            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(
-                "screencap -p /data/local/tmp/meek-chat-dark.png"
-            )
-        ).use { it.readBytes() }
-    }
 
     @Test
     fun smartFollow_stopsOnManualScroll_andResumesFromJumpToLatest() {

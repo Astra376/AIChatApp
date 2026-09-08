@@ -81,21 +81,27 @@ fun AppearanceBackdrop(preferences: AppearanceDto, modifier: Modifier = Modifier
     }
 }
 @Composable
+fun ProfileBackdrop(appearance: AppearanceDto, modifier: Modifier = Modifier) {
+    if (appearance.profileBackgroundId.isEmpty()) return
+    val preset = appearancePreset(appearance.profileBackgroundId)
+    Box(modifier) {
+        if (preset != null) PresetArtwork(preset, Modifier.fillMaxSize())
+        else AppearanceImage(appearance.profileBackgroundId, appearance.profileBackgroundUrl, Modifier.fillMaxSize(), "Profile background")
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = .45f)))
+    }
+}
+
+@Composable
 fun AppearanceProfileHeader(name: String,avatarUrl: String?,stats: List<ProfileCountStat>,appearance: AppearanceDto,modifier: Modifier=Modifier) {
     Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if (appearance.bannerId.isNotEmpty()) Box(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(16.dp))) {
-            val preset = appearancePreset(appearance.bannerId)
-            if (preset != null) PresetArtwork(preset, Modifier.fillMaxSize())
-            else AppearanceImage(appearance.bannerId, appearance.bannerUrl, Modifier.fillMaxSize(), "Profile banner")
-        }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
-            if (appearance.profileBackgroundId.isNotEmpty()) {
-                val preset = appearancePreset(appearance.profileBackgroundId)
+            if (appearance.bannerId.isNotEmpty()) {
+                val preset = appearancePreset(appearance.bannerId)
                 if (preset != null) PresetArtwork(preset, Modifier.matchParentSize())
-                else AppearanceImage(appearance.profileBackgroundId, appearance.profileBackgroundUrl, Modifier.matchParentSize())
+                else AppearanceImage(appearance.bannerId, appearance.bannerUrl, Modifier.matchParentSize())
                 Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = .42f)))
             }
-            Row(Modifier.fillMaxWidth().padding(if(appearance.profileBackgroundId.isNotEmpty()) 12.dp else 0.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(if(appearance.bannerId.isNotEmpty()) 12.dp else 0.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                 Box(Modifier.size(104.dp),contentAlignment=Alignment.Center) {
                     CircleAvatar(name=name.ifBlank{"User"},avatarUrl=avatarUrl,modifier=Modifier.size(if(appearance.frame=="none") 104.dp else 88.dp))
                     ProfileFrame(appearance.frame,Modifier.fillMaxSize())

@@ -53,6 +53,7 @@ fun ActivityRoute(
     LaunchedEffect(state.error) {
         state.error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    val showLoading = com.example.aichat.core.ui.rememberDelayedLoading(state.loading)
     ScreenBackgroundBox {
         Box(Modifier.fillMaxSize()) {
             LazyColumn(
@@ -68,11 +69,18 @@ fun ActivityRoute(
                         if (state.items.isNotEmpty()) TextButton(onClick = viewModel::clearAll) { Text("Clear all") }
                     }
                 }
-                if (state.loading && state.items.isEmpty()) item {
+                if (showLoading && state.items.isEmpty()) item {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
                 }
                 if (!state.loading && state.items.isEmpty()) item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.padding(bottom = 22.dp).size(112.dp), contentAlignment = Alignment.Center) {
+                            Surface(shape = androidx.compose.foundation.shape.CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = .09f), modifier = Modifier.fillMaxSize()) {}
+                            com.example.aichat.core.design.AppIcon(com.example.aichat.core.design.AppIcons.activity, null, size = 54.dp, tint = MaterialTheme.colorScheme.primary)
+                            Surface(shape = androidx.compose.foundation.shape.CircleShape, color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.BottomEnd).size(34.dp)) {
+                                Box(contentAlignment = Alignment.Center) { Text("✓", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleLarge) }
+                            }
+                        }
                         Text("You're all caught up", style = MaterialTheme.typography.titleMedium)
                         Text("Character messages and updates will appear here.", style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))

@@ -18,10 +18,15 @@ export function database() {
       async all() { return {results: sqlite.prepare(sql).all(...args)}; }
     };
   }
+  let transactionQueue = Promise.resolve<unknown>(undefined);
   const env = {DB: {prepare: statement, async batch(statements: Array<ReturnType<typeof statement>>) {
+    const transaction = transactionQueue.then(async () => {
     sqlite.exec("BEGIN");
     try { const results = []; for (const item of statements) results.push(await item.run()); sqlite.exec("COMMIT"); return results; }
     catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+    });
+    transactionQueue = transaction.catch(() => undefined);
+    return transaction;
   }}} as unknown as Env;
   const context = (userId = "user") => ({env, user: {userId}, request: new Request("https://example.com"), url: new URL("https://example.com"), params: {}} as RequestContext);
   return {sqlite, env, context};

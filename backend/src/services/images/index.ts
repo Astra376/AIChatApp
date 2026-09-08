@@ -1,3 +1,4 @@
+import { SCENE_STYLE } from "./scenes";
 import type { RequestContext } from "../../env";
 import { publicAssetUrl } from "../../lib/assets";
 import { AppError } from "../../lib/errors";
@@ -56,8 +57,8 @@ export async function generateChatBackground(
   }
 
   const image = await generateImageWithFallback(context.env, {
-    model: context.env.OPENROUTER_BACKGROUND_MODEL || IMAGE_MODELS.nano,
-    prompt, aspectRatio: "9:16"
+    model: context.env.OPENROUTER_BACKGROUND_MODEL || "black-forest-labs/flux.2-klein-4b",
+    prompt: `${SCENE_STYLE}\nEnvironment: ${prompt}`, aspectRatio: "9:16"
   });
   const imageUrl = await storeGeneratedImage(context.env, key, image);
   return { imageUrl };

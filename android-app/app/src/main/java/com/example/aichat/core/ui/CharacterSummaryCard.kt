@@ -38,6 +38,7 @@ fun CharacterSummaryCard(
     modifier: Modifier = Modifier,
     imageAspectRatio: Float = 1.25f,
     isOpening: Boolean = false,
+    compact: Boolean = false,
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
@@ -45,7 +46,6 @@ fun CharacterSummaryCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(DesignMetrics.portraitCorner))
             .clickable(enabled = enabled, onClick = onClick)
     ) {
         Box(
@@ -58,7 +58,7 @@ fun CharacterSummaryCard(
                 avatarUrl = character.avatarUrl,
                 modifier = Modifier.fillMaxSize()
             )
-            if (isOpening) {
+            if (rememberDelayedLoading(isOpening)) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center).size(36.dp)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),
@@ -83,8 +83,8 @@ fun CharacterSummaryCard(
             Text(
                 text = character.name,
                 style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = 20.sp,
-                    lineHeight = 22.sp
+                    fontSize = if (compact) 15.sp else 20.sp,
+                    lineHeight = if (compact) 18.sp else 22.sp
                 ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis

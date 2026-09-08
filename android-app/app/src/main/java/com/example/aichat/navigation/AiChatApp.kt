@@ -3,6 +3,9 @@ package com.example.aichat.navigation
 import android.net.Uri
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import com.example.aichat.core.ui.rememberScrollChrome
+import com.example.aichat.core.ui.ScrollChromeBar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -268,6 +271,9 @@ private fun MainShell(ownerUserId: String, profileName: String, profileAvatarUrl
         composable("edit-profile") { entry ->
             EditProfileRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) })
         }
+        composable("discover/{categoryId}") { entry ->
+            com.example.aichat.feature.home.DiscoveryRoute(onBack = { nav.backFrom(entry) }, onOpenConversation = { nav.openFrom(entry, "chat/${Uri.encode(it)}") })
+        }
         composable("search") { entry ->
             SearchRoute(paddingValues = PaddingValues(), onBack = { nav.backFrom(entry) }, onOpenConversation = { nav.openFrom(entry, "chat/${Uri.encode(it)}") })
         }
@@ -324,12 +330,15 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
     val chatListViewModel: com.example.aichat.feature.chatlist.ChatListViewModel = hiltViewModel()
     val chats by chatListViewModel.uiState.collectAsStateWithLifecycle()
     val unread = chats.conversations.sumOf { it.unreadCount }
+    val chrome = rememberScrollChrome()
+    LaunchedEffect(pager.settledPage) { chrome.visible = true }
     Scaffold(
+        modifier = Modifier.nestedScroll(chrome),
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             val background = MaterialTheme.colorScheme.background
-            Column {
+            ScrollChromeBar(chrome, top = true) { Column {
                 MainPageHeader(
                     title = current.contentDescription,
                     onOpenSearch = { onOpen("search") }, onOpenActivity = { onOpen("activity") },
@@ -340,9 +349,10 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                     } else null
                 )
             }
+            }
         },
         bottomBar = {
-            NavigationBar(
+            ScrollChromeBar(chrome, top = false) { NavigationBar(
                 containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
                 windowInsets = WindowInsets.navigationBars,
                 modifier = Modifier.height(AppChrome.bottomBarHeight + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
@@ -375,6 +385,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
                     )
                 }
             }
+            }
         }
     ) { padding ->
         HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), key = { tabs[it].route }) { page ->
@@ -382,7 +393,7 @@ private fun MainTabs(profileName: String, profileAvatarUrl: String?, onOpen: (St
             when (tabs[page]) {
                 MainDestination.Home -> NewHomeRoute(paddingValues = padding, onOpenConversation = openChat,
                     onOpenStudio = { onOpen("create-character") }, onOpenChats = { scope.launch { pager.scrollToPage(tabs.indexOf(MainDestination.Chats)) } })
-                MainDestination.Discover -> HomeRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") }, onOpenConversation = openChat)
+                MainDestination.Discover -> com.example.aichat.feature.home.DiscoveryRoute(paddingValues = padding, onOpenCategory = { onOpen("discover/${Uri.encode(it)}") }, onOpenConversation = openChat)
                 MainDestination.Chats -> ChatListRoute(paddingValues = padding, onOpenConversation = openChat, onOpenGroups = { onOpen("groups") })
                 MainDestination.Profile -> ProfileRoute(paddingValues = padding, onOpenActivity = { onOpen("activity") },
                     onOpenConversation = openChat, onOpenEditProfile = { onOpen("edit-profile") },

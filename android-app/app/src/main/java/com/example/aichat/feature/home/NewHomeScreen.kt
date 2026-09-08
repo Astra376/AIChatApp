@@ -76,6 +76,7 @@ data class NewHomeUiState(
     val unreadChats: List<ConversationSummary> = emptyList(),
     val totalUnreadCount: Int = 0,
     val topPicks: List<CharacterSummary> = emptyList(),
+    val featuredRecommended: List<CharacterSummary> = emptyList(),
     val recommendedFeed: List<CharacterSummary> = emptyList(),
     val recommendedCursor: String? = null,
     val isFeedLoading: Boolean = true,
@@ -142,10 +143,12 @@ class NewHomeViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isFeedLoading = true, errorMessage = null)
             runCatching { homeRepository.loadFeed(cursor = null) }
                 .onSuccess { page ->
-                    val picks = page.items.take(4)
-                    val recs = page.items.drop(4)
+                    val featured = page.items.take(4)
+                    val picks = page.items.drop(4).take(4)
+                    val recs = page.items.drop(8)
                     _uiState.value = _uiState.value.copy(
                         topPicks = picks,
+                        featuredRecommended = featured,
                         recommendedFeed = recs,
                         recommendedCursor = page.nextCursor,
                         isFeedLoading = false
@@ -171,7 +174,7 @@ class NewHomeViewModel @Inject constructor(
             try {
                 val page = homeRepository.loadFeed(cursor = cursor)
                 _uiState.value = _uiState.value.copy(
-                    recommendedFeed = (_uiState.value.recommendedFeed + page.items).distinctBy { it.id },
+                    recommendedFeed = (_uiState.value.recommendedFeed + page.items).distinctBy { it.id }.filterNot { character -> _uiState.value.featuredRecommended.any { it.id == character.id } || _uiState.value.topPicks.any { it.id == character.id } },
                     recommendedCursor = page.nextCursor
                 )
             } catch (error: Exception) {
@@ -225,7 +228,7 @@ fun NewHomeRoute(
                 Column {
                     // Unread Header
                     SectionHeader(
-                        title = "Unread (${state.totalUnreadCount})",
+                        title = if (state.totalUnreadCount > 0) "Unread (${state.totalUnreadCount})" else "Recent chats",
                         modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                         onClick = onOpenChats
                     )
@@ -244,7 +247,7 @@ fun NewHomeRoute(
                                 StoryNodePlaceholder()
                             }
                         }
-                        items(state.unreadChats, key = { it.id }) { chat ->
+                        items((state.unreadChats + state.recentChats).distinctBy { it.characterId }, key = { it.characterId }) { chat ->
                             StoryNode(
                                 chat = chat,
                                 onClick = { onOpenConversation(chat.id) }
@@ -252,6 +255,18 @@ fun NewHomeRoute(
                         }
                     }
 
+                    if (state.featuredRecommended.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        SectionHeader("Recommended for you", Modifier.padding(horizontal = AppChrome.screenHorizontalPadding), null)
+                        Spacer(Modifier.height(10.dp))
+                        LazyRow(contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(state.featuredRecommended, key = { it.id }) { character ->
+                                CharacterSummaryCard(character, modifier = Modifier.width(154.dp), imageAspectRatio = 1f,
+                                    isOpening = chatLauncher.openingCharacterId == character.id,
+                                    enabled = chatLauncher.openingCharacterId == null) { chatLauncher.open(character.id) }
+                            }
+                        }
+                    }
                     if (state.topPicks.isNotEmpty() || state.isFeedLoading) {
                         Spacer(modifier = Modifier.height(10.dp))
                         SectionHeader(
@@ -283,7 +298,7 @@ fun NewHomeRoute(
                     }
 
                     if (state.recentChats.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         SectionHeader(
                             title = "Continue",
                             modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
@@ -524,7 +539,6 @@ fun TopPickCard(
     Column(
         modifier = Modifier
             .width(220.dp)
-            .clip(RoundedCornerShape(12.dp))
             .clickable(enabled = enabled, onClick = onClick)
     ) {
         Box(
@@ -538,7 +552,7 @@ fun TopPickCard(
                 modifier = Modifier.fillMaxSize(),
                 alignment = BiasAlignment(0f, -0.8f)
             )
-            if (isOpening) {
+            if (com.example.aichat.core.ui.rememberDelayedLoading(isOpening)) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center).size(36.dp)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),
@@ -606,15 +620,14 @@ fun TopPickCardPlaceholder() {
 fun ContinueNode(chat: ConversationSummary, onClick: () -> Unit) {
     Column(
         modifier = Modifier
-            .width(76.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .width(94.dp)
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.Start
     ) {
         CharacterPortrait(
             name = chat.characterName,
             avatarUrl = chat.characterAvatarUrl,
-            modifier = Modifier.size(76.dp)
+            modifier = Modifier.size(94.dp)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(

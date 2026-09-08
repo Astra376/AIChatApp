@@ -197,6 +197,7 @@ fun CreatorProfileRoute(
     }
 
     ScreenBackgroundBox(snackbarHostState = snackbarHostState.takeIf { onError == null }) {
+        state.showcase?.appearance?.let { com.example.aichat.feature.customization.ProfileBackdrop(it, Modifier.fillMaxSize()) }
         CreatorProfileContent(
             state = state,
             onBack = onBack,

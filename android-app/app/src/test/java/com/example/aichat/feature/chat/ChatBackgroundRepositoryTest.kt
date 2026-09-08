@@ -51,155 +51,79 @@ class ChatBackgroundRepositoryTest {
     }
 
     @Test
-    fun changedSceneUsesSelectedRecentVersionAndIgnoresOldHistory() = runTest {
-        val rows = (0 until 120).map { index ->
-            com.example.aichat.core.db.MessageEntity("scene-$index", CONVERSATION_ID, index, com.example.aichat.core.model.MessageRole.ASSISTANT.name,
-                if (index == 0) "Scene: an ancient castle" else "Just talking.", false, index.toLong(), index.toLong(),
-                if (index == 119) "scene-variant" else null, "SENT")
-        }
-        database.messageDao().insertAll(rows)
-        database.assistantRegenerationDao().insert(com.example.aichat.core.db.AssistantRegenerationEntity(
-            "scene-variant", "scene-119", "Scene: a quiet beach at sunset", 121))
+    fun sendsConversationIdentityForServerSideSceneGrounding() = runTest {
         repository.refreshIfSceneChanged(CONVERSATION_ID).getOrThrow()
-        assertThat(imageApi.backgroundRequests.single().prompt).contains("quiet beach")
-        assertThat(imageApi.backgroundRequests.single().prompt).doesNotContain("ancient castle")
-        repository.refreshIfSceneChanged(CONVERSATION_ID).getOrThrow()
-        assertThat(imageApi.backgroundRequests).hasSize(1)
+        assertThat(imageApi.backgroundRequests.single().conversationId).isEqualTo(CONVERSATION_ID)
+        assertThat(imageApi.backgroundRequests.single().prompt).isEmpty()
+        assertThat(imageApi.backgroundRequests.single().requestKey).isNull()
     }
 
     @Test
-    fun ensureInitialBackground_persistsGeneratedUrlForCharacterAndConversation() = runTest {
-        imageApi.backgroundUrl = "https://assets.example/scene.jpg"
-
+    fun persistsAuthoritativeSceneWithoutSharingItWithOtherChats() = runTest {
         repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-
-        val character = database.characterDao().getById(CHARACTER_ID)
         val scene = database.conversationSceneDao().getByConversation(CONVERSATION_ID)
-        assertThat(imageApi.backgroundRequests).hasSize(1)
-        assertThat(imageApi.backgroundRequests.single().prompt).contains("Astra")
-        assertThat(character?.initialSceneUrl).isEqualTo("https://assets.example/scene.jpg")
-        assertThat(character?.initialSceneKey).isNotEmpty()
-        assertThat(imageApi.backgroundRequests.single().requestKey)
-            .isEqualTo(character?.initialSceneKey)
-        assertThat(scene?.imageUrl).isEqualTo("https://assets.example/scene.jpg")
-        assertThat(scene?.sceneKey).isEqualTo(character?.initialSceneKey)
-    }
-
-    @Test
-    fun ensureInitialBackground_reusesPersistedCharacterSceneWithoutGeneratingAgain() = runTest {
-        val character = requireNotNull(database.characterDao().getById(CHARACTER_ID))
-        database.characterDao().upsert(
-            character.copy(
-                initialSceneUrl = "https://assets.example/existing.jpg",
-                initialSceneKey = "existing-key"
-            )
-        )
-
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-
-        val scene = database.conversationSceneDao().getByConversation(CONVERSATION_ID)
-        assertThat(imageApi.backgroundRequests).isEmpty()
-        assertThat(scene?.imageUrl).isEqualTo("https://assets.example/existing.jpg")
-        assertThat(scene?.sceneKey).isEqualTo("existing-key")
-    }
-
-    @Test
-    fun ensureInitialBackground_providerFailureLeavesSceneStateUnchanged() = runTest {
-        imageApi.backgroundFailure = IllegalStateException("provider unavailable")
-
-        val result = repository.ensureInitialBackground(CONVERSATION_ID)
-
-        assertThat(result.isFailure).isTrue()
-        assertThat(imageApi.backgroundRequests).hasSize(1)
-        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)).isNull()
+        assertThat(scene?.sceneKey).isEqualTo("anime:server-scene")
+        assertThat(scene?.imageUrl).isEqualTo(imageApi.backgroundUrl)
         assertThat(database.characterDao().getById(CHARACTER_ID)?.initialSceneUrl).isNull()
     }
 
     @Test
-    fun ensureInitialBackground_concurrentCallsGenerateOnlyOnce() = runTest {
-        imageApi.backgroundDelayMillis = 50L
-
-        coroutineScope {
-            listOf(
-                async { repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow() },
-                async { repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow() }
-            ).awaitAll()
-        }
-
+    fun replacesLegacyCharacterBackgroundWithTheCurrentStoryScene() = runTest {
+        val character = requireNotNull(database.characterDao().getById(CHARACTER_ID))
+        database.characterDao().upsert(character.copy(initialSceneUrl = "https://assets.example/legacy.jpg", initialSceneKey = "legacy"))
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl).isEqualTo(imageApi.backgroundUrl)
         assertThat(imageApi.backgroundRequests).hasSize(1)
     }
 
     @Test
-    fun repairFailedBackground_replacesBrokenPersistedInitialScene() = runTest {
-        val brokenUrl =
-            "https://worker.example/v1/assets/chat-backgrounds/user-1/broken.jpg"
-        val character = requireNotNull(database.characterDao().getById(CHARACTER_ID))
-        database.characterDao().upsert(
-            character.copy(
-                initialSceneUrl = brokenUrl,
-                initialSceneKey = "broken-key"
-            )
-        )
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-        imageApi.backgroundUrl = "https://assets.example/repaired.jpg"
-
-        repository.repairFailedBackground(CONVERSATION_ID, brokenUrl).getOrThrow()
-
-        val repairedCharacter = database.characterDao().getById(CHARACTER_ID)
-        val repairedScene = database.conversationSceneDao().getByConversation(CONVERSATION_ID)
-        assertThat(imageApi.backgroundRequests).hasSize(1)
-        assertThat(repairedCharacter?.initialSceneUrl)
-            .isEqualTo("https://assets.example/repaired.jpg")
-        assertThat(repairedScene?.imageUrl).isEqualTo("https://assets.example/repaired.jpg")
-        assertThat(repairedScene?.sceneKey).isEqualTo(repairedCharacter?.initialSceneKey)
-    }
-
-    @Test
-    fun repairFailedBackground_ignoresUrlThatIsNoLongerCurrent() = runTest {
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-        val requestsBeforeRepair = imageApi.backgroundRequests.size
-
-        repository.repairFailedBackground(
-            CONVERSATION_ID,
-            "https://assets.example/stale.jpg"
-        ).getOrThrow()
-
-        assertThat(imageApi.backgroundRequests).hasSize(requestsBeforeRepair)
-        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl)
-            .isEqualTo(imageApi.backgroundUrl)
-    }
-
-    @Test
-    fun repairFailedBackground_generationFailureKeepsBrokenUrlForLaterRetry() = runTest {
-        val brokenUrl = "https://assets.example/missing.jpg"
-        val character = requireNotNull(database.characterDao().getById(CHARACTER_ID))
-        database.characterDao().upsert(
-            character.copy(
-                initialSceneUrl = brokenUrl,
-                initialSceneKey = "broken-key"
-            )
-        )
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+    fun initialProviderFailureLeavesSceneStateUnchanged() = runTest {
         imageApi.backgroundFailure = IllegalStateException("provider unavailable")
-
-        val result = repository.repairFailedBackground(CONVERSATION_ID, brokenUrl)
-
-        assertThat(result.isFailure).isTrue()
-        assertThat(database.characterDao().getById(CHARACTER_ID)?.initialSceneUrl)
-            .isEqualTo(brokenUrl)
-        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl)
-            .isEqualTo(brokenUrl)
+        assertThat(repository.ensureInitialBackground(CONVERSATION_ID).isFailure).isTrue()
+        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)).isNull()
     }
 
     @Test
-    fun reopeningChatPreservesTheCurrentScene() = runTest {
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-        val scene = requireNotNull(database.conversationSceneDao().getByConversation(CONVERSATION_ID))
-        database.conversationSceneDao().upsert(scene.copy(sceneKey = "new-scene", imageUrl = "https://assets.example/new.jpg"))
-        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
-        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)?.imageUrl)
-            .isEqualTo("https://assets.example/new.jpg")
+    fun concurrentInitialCallsRequestOnlyOnce() = runTest {
+        imageApi.backgroundDelayMillis = 50L
+        coroutineScope { listOf(async { repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow() }, async { repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow() }).awaitAll() }
         assertThat(imageApi.backgroundRequests).hasSize(1)
+    }
+
+    @Test
+    fun repairResolvesTheSameServerSceneWithoutNewRequestKey() = runTest {
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        repository.repairFailedBackground(CONVERSATION_ID, imageApi.backgroundUrl).getOrThrow()
+        assertThat(imageApi.backgroundRequests).hasSize(2)
+        assertThat(imageApi.backgroundRequests.map { it.conversationId }.distinct()).containsExactly(CONVERSATION_ID)
+        assertThat(imageApi.backgroundRequests.all { it.requestKey == null }).isTrue()
+    }
+
+    @Test
+    fun repairIgnoresAStaleImageFailure() = runTest {
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        repository.repairFailedBackground(CONVERSATION_ID, "https://assets.example/stale.jpg").getOrThrow()
+        assertThat(imageApi.backgroundRequests).hasSize(1)
+    }
+
+    @Test
+    fun failedRefreshPreservesPersistedScene() = runTest {
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        val before = database.conversationSceneDao().getByConversation(CONVERSATION_ID)
+        imageApi.backgroundFailure = IllegalStateException("provider unavailable")
+        assertThat(repository.refreshIfSceneChanged(CONVERSATION_ID).isFailure).isTrue()
+        assertThat(database.conversationSceneDao().getByConversation(CONVERSATION_ID)).isEqualTo(before)
+    }
+
+    @Test
+    fun reopeningUnchangedChatReusesCacheButNewActivityRechecksScene() = runTest {
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        assertThat(imageApi.backgroundRequests).hasSize(1)
+        val conversation = requireNotNull(database.conversationDao().getById(CONVERSATION_ID))
+        database.conversationDao().upsert(conversation.copy(updatedAt = System.currentTimeMillis() + 1_000))
+        repository.ensureInitialBackground(CONVERSATION_ID).getOrThrow()
+        assertThat(imageApi.backgroundRequests).hasSize(2)
     }
 
     private suspend fun seedConversation() {
@@ -259,7 +183,7 @@ class ChatBackgroundRepositoryTest {
             backgroundRequests += body
             if (backgroundDelayMillis > 0L) delay(backgroundDelayMillis)
             backgroundFailure?.let { throw it }
-            return GenerateChatBackgroundResponseDto(backgroundUrl)
+            return GenerateChatBackgroundResponseDto(backgroundUrl, "server-scene", "A moonlit garden")
         }
     }
 

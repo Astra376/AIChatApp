@@ -54,7 +54,7 @@ fun Modifier.shimmerPlaceholder(
         ),
         label = "placeholder-shimmer-offset"
     )
-    clip(shape).background(
+    delayedLoadingAppearance().clip(shape).background(
         Brush.linearGradient(
             colors = listOf(
                 placeholderBase,

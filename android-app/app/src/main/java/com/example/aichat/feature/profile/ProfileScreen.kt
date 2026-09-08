@@ -225,6 +225,7 @@ fun ProfileRoute(
     }
 
     ScreenBackgroundBox(snackbarHostState = snackbarHostState) {
+        com.example.aichat.feature.customization.ProfileBackdrop(appearance, Modifier.fillMaxSize())
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),

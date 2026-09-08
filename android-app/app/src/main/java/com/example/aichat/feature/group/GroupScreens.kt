@@ -1,5 +1,7 @@
 package com.example.aichat.feature.group
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction

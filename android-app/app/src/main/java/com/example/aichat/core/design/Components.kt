@@ -90,7 +90,7 @@ private fun elevatedSurfaceColor(): Color {
 }
 
 @Composable
-private fun controlSurfaceColor(selected: Boolean): Color {
+internal fun controlSurfaceColor(selected: Boolean): Color {
     val scheme = MaterialTheme.colorScheme
     return if (selected) {
         scheme.onSurface.copy(alpha = 0.09f).compositeOver(scheme.surface)
@@ -494,73 +494,28 @@ fun CharacterPortrait(
     shape: Shape = RoundedCornerShape(DesignMetrics.portraitCorner),
     alignment: Alignment = Alignment.Center
 ) {
-    val palette = avatarPalette(avatarUrl ?: name)
-    when {
-        avatarUrl.isNullOrBlank().not() -> {
-            AsyncImage(
-                model = avatarUrl,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                alignment = alignment,
-                modifier = modifier
-                    .clip(shape)
-                    .background(controlSurfaceColor(selected = false))
-            )
-        }
+    val placeholder = androidx.compose.ui.res.painterResource(characterPlaceholder(name))
+    AsyncImage(
+        model = avatarUrl?.takeIf { it.isNotBlank() },
+        contentDescription = name, contentScale = ContentScale.Crop, alignment = alignment,
+        placeholder = placeholder, fallback = placeholder, error = placeholder,
+        modifier = modifier.clip(shape)
+    )
+}
 
-        else -> {
-            Box(
-                modifier = modifier
-                    .clip(shape)
-                    .background(brush = Brush.linearGradient(palette)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = name.take(2).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
+private fun characterPlaceholder(name: String): Int {
+    val variants = intArrayOf(
+        com.example.aichat.R.drawable.character_silhouette_slate,
+        com.example.aichat.R.drawable.character_silhouette_plum,
+        com.example.aichat.R.drawable.character_silhouette_teal,
+        com.example.aichat.R.drawable.character_silhouette_clay
+    )
+    return variants[Math.floorMod(name.hashCode(), variants.size)]
 }
 
 @Composable
-fun CircleAvatar(
-    name: String,
-    avatarUrl: String?,
-    modifier: Modifier = Modifier
-) {
-    val palette = avatarPalette(avatarUrl ?: name)
-    when {
-        avatarUrl.isNullOrBlank().not() -> {
-            AsyncImage(
-                model = avatarUrl,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                modifier = modifier
-                    .clip(CircleShape)
-                    .background(controlSurfaceColor(selected = false))
-            )
-        }
-
-        else -> {
-            Box(
-                modifier = modifier
-                    .clip(CircleShape)
-                    .background(brush = Brush.linearGradient(palette)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = name.take(2).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
+fun CircleAvatar(name: String, avatarUrl: String?, modifier: Modifier = Modifier) {
+    CharacterPortrait(name, avatarUrl, modifier, shape = CircleShape)
 }
 
 @Composable

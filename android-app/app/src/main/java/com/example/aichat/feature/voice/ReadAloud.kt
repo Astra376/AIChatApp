@@ -1,5 +1,7 @@
 package com.example.aichat.feature.voice
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -9,7 +11,6 @@ import android.net.Uri
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.*

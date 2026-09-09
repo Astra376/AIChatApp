@@ -19,9 +19,9 @@ export class RequestDeadline {
 
   get signal(): AbortSignal { return this.controller.signal; }
 
-  touch(): void {
+  touch(idleMs = this.idleMs): void {
     clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.expire(), this.idleMs);
+    this.idleTimer = setTimeout(() => this.expire(), idleMs);
   }
 
   private expire(): void {

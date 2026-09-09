@@ -280,6 +280,13 @@ function safeClose(controller: ReadableStreamDefaultController<Uint8Array>): voi
   }
 }
 
+function startStreamHeartbeat(controller: ReadableStreamDefaultController<Uint8Array>): () => void {
+  const timer = setInterval(() => {
+    try { controller.enqueue(new TextEncoder().encode(": keepalive\n\n")); } catch { clearInterval(timer); }
+  }, 10_000);
+  return () => clearInterval(timer);
+}
+
 function createLinkedAbortController(sourceSignal: AbortSignal): {
   abortController: AbortController;
   unlink: () => void;
@@ -436,6 +443,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const stopHeartbeat = startStreamHeartbeat(controller);
         safeEnqueue(controller, {
           type: "accepted_continue",
           runId,
@@ -542,6 +550,7 @@ export async function continueAssistantAndStream(context: RequestContext, conver
             });
           }
         } finally {
+          stopHeartbeat();
           await finishConversationStream(
             context,
             conversationId,
@@ -627,6 +636,7 @@ export async function sendMessageAndStream(
     let finalizationPhase: "streaming" | "full" | "partial" | "settled" = "streaming";
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const stopHeartbeat = startStreamHeartbeat(controller);
         safeEnqueue(controller, {
           type: "accepted_send",
           runId,
@@ -734,6 +744,7 @@ export async function sendMessageAndStream(
             });
           }
         } finally {
+          stopHeartbeat();
           await finishConversationStream(
             context,
             conversationId,
@@ -796,6 +807,7 @@ export async function regenerateLatestAssistantAndStream(
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const stopHeartbeat = startStreamHeartbeat(controller);
         safeEnqueue(controller, {
           type: "accepted_regenerate",
           runId,
@@ -917,6 +929,7 @@ export async function regenerateLatestAssistantAndStream(
             });
           }
         } finally {
+          stopHeartbeat();
           await finishConversationStream(
             context,
             message.conversation_id,

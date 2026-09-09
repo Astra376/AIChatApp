@@ -247,7 +247,6 @@ class ChatViewModel @Inject constructor(
         launchStreamingAction {
             chatRepository.sendMessage(conversationId, text)
                 .onFailure { error ->
-                    viewModelScope.launch { chatRepository.refreshConversation(conversationId) }
                     val shouldRestoreComposer = error !is SendMessageFailedException || !error.accepted
                     if (shouldRestoreComposer && composerText.value.isBlank()) {
                         onComposerChanged(text)

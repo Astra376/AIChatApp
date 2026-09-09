@@ -42,6 +42,7 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 2;
 const STREAM_IDLE_MS = 12_000;
+const FIRST_TOKEN_MS = 30_000;
 const STREAM_TOTAL_MS = 60_000;
 
 function configuredModels(env: Env): string[] {
@@ -222,7 +223,7 @@ async function* readCompletionStream(response: Response, deadline: RequestDeadli
       }
       const chunk = parsed.choices?.[0]?.delta?.content;
       if (chunk) {
-        deadline.touch();
+        deadline.touch(STREAM_IDLE_MS);
         emittedContent = true;
         chunks.push(chunk);
       }
@@ -257,6 +258,9 @@ async function* readCompletionStream(response: Response, deadline: RequestDeadli
   if (!emittedContent) {
     throw new OpenRouterFailure(502, "The model returned an empty response.", true);
   }
+  if (!finished) {
+    throw new OpenRouterFailure(502, "The model response was interrupted.", false);
+  }
 }
 
 export async function* streamChatText(
@@ -271,7 +275,9 @@ export async function* streamChatText(
     for (let streamAttempt = 0; streamAttempt < MAX_ATTEMPTS; streamAttempt += 1) {
       const remainingMs = STREAM_TOTAL_MS - (Date.now() - startedAt);
       if (remainingMs <= 0) throw new DOMException("The provider stopped responding.", "TimeoutError");
-      const deadline = new RequestDeadline(options.reasoning?.enabled ? 25_000 : STREAM_IDLE_MS, remainingMs, signal);
+      // Queueing/prefill and hidden reasoning precede visible text. They need a
+      // different budget from a stalled reply that has already begun streaming.
+      const deadline = new RequestDeadline(options.reasoning?.enabled ? 45_000 : FIRST_TOKEN_MS, remainingMs, signal);
       try {
         const response = await requestOpenRouter(env, {
           ...modelSelection(env),

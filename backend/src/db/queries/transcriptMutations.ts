@@ -1,4 +1,5 @@
 import type { Env } from "../../env";
+import { AppError } from "../../lib/errors";
 
 // These checks run inside the same D1 transaction as the write. Checking a
 // lease only in the service leaves a race with a newly accepted generation.
@@ -44,8 +45,16 @@ export async function rewindToMessageAtomically(
         SELECT target.position FROM messages target WHERE target.id = ? AND target.conversation_id = ?
       ) AND ${unlockedOwner}
     `).bind(conversationId, messageId, conversationId, conversationId, ownerId, now),
-    activityUpdate(env, conversationId, now)
+    activityUpdate(env, conversationId, now),
+    // Distinguish an already-rewound transcript from a write fenced out by a
+    // competing generation or a removed target, within this same transaction.
+    env.DB.prepare(`SELECT 1 AS allowed FROM messages target
+      WHERE target.id = ? AND target.conversation_id = ? AND ${unlockedOwner}
+    `).bind(messageId, conversationId, conversationId, ownerId, now)
   ]);
+  if (!result[2].results?.length) {
+    throw new AppError(409, "TRANSCRIPT_CHANGED", "The conversation changed before the rewind. Refresh and try again.");
+  }
   return Number(result[0].meta.changes);
 }
 

@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 private class StreamFailedException(
@@ -66,7 +67,8 @@ private class StreamProtocolException(
 class SendMessageFailedException(
     val accepted: Boolean,
     override val message: String,
-    cause: Throwable? = null
+    cause: Throwable? = null,
+    val userMessageId: String? = null
 ) : IllegalStateException(message, cause)
 
 private class ChatRuleViolation(message: String) : IllegalStateException(message)
@@ -96,6 +98,7 @@ class ChatRepository @Inject constructor(
     companion object {
         const val ORIGINAL_VARIANT_ID = "__original__"
         private val STOP_RECONCILIATION_DELAYS_MS = longArrayOf(0L, 150L, 350L)
+        private const val REMOTE_RUN_POLL_MS = 2_000L
     }
     private val activeStreams = MutableStateFlow<Map<String, ActiveAssistantStream>>(emptyMap())
     private val stopRequests = ConcurrentHashMap.newKeySet<String>()
@@ -134,8 +137,10 @@ class ChatRepository @Inject constructor(
 
     private suspend fun streamOperation(conversationId: String, block: suspend () -> Unit): Result<Unit> =
         operationScope.async {
-            captureResult {
+            var started = false
+            val result = captureResult {
                 conversationOperation(conversationId) {
+                    started = true
                     val job = currentCoroutineContext()[Job]!!
                     generationJobs[conversationId] = job
                     try {
@@ -145,6 +150,16 @@ class ChatRepository @Inject constructor(
                     }
                 }
             }
+            // Recovery belongs to the app-owned operation too. A destination
+            // that was closed cannot reconcile a lost completion or acceptance.
+            if (started && result.isFailure) {
+                withTimeoutOrNull(5_000) { refreshConversation(conversationId) }
+            }
+            val failure = result.exceptionOrNull() as? SendMessageFailedException
+            if (failure != null && !failure.accepted && failure.userMessageId != null &&
+                messageDao.getById(failure.userMessageId)?.sendState == MessageSendState.SENT.name) {
+                Result.failure(SendMessageFailedException(true, failure.message, failure, failure.userMessageId))
+            } else result
         }.await()
 
     suspend fun stopStreaming(conversationId: String, draftKey: String): Result<Unit> =
@@ -264,13 +279,27 @@ class ChatRepository @Inject constructor(
             accepted = true,
             remoteOnly = true
         ))
+        // Keep the existing observer for this exact run. Refreshing its status
+        // must not restart the timer or cancel the polling coroutine itself.
+        if (current?.draftKey == draftKey && remoteExpiryJobs[detail.id]?.isActive == true) return
         remoteExpiryJobs.remove(detail.id)?.cancel()
         lateinit var expiryJob: Job
         expiryJob = operationScope.launch(start = CoroutineStart.LAZY) {
-            delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(1L))
-            if (remoteExpiryJobs.remove(detail.id, expiryJob)) {
-                clearActiveStream(detail.id, draftKey)
-                refreshConversation(detail.id)
+            try {
+                while (currentActiveStream(detail.id)?.draftKey == draftKey) {
+                    val remaining = expiresAt - System.currentTimeMillis()
+                    if (remaining <= 0L) {
+                        // Release local controls even if the recovery read is offline.
+                        remoteExpiryJobs.remove(detail.id, expiryJob)
+                        clearActiveStream(detail.id, draftKey)
+                        withTimeoutOrNull(5_000) { refreshConversation(detail.id) }
+                        break
+                    }
+                    delay(minOf(REMOTE_RUN_POLL_MS, remaining))
+                    withTimeoutOrNull(minOf(5_000L, remaining)) { refreshConversation(detail.id) }
+                }
+            } finally {
+                remoteExpiryJobs.remove(detail.id, expiryJob)
             }
         }
         remoteExpiryJobs[detail.id] = expiryJob
@@ -451,11 +480,21 @@ class ChatRepository @Inject constructor(
         try {
             chatApi.editMessage(message.id, EditMessageRequestDto(normalized))
         } catch (error: Throwable) {
-            withContext(NonCancellable) {
-                database.withTransaction {
-                    messageDao.update(message)
-                    selected?.let { regenerationDao.insert(it) }
-                    conversation?.let { conversationDao.upsert(it) }
+            val reconciled = if (error is CancellationException) null else reconcileMutation(message.conversationId) { detail ->
+                val remote = detail.messages.firstOrNull { it.id == message.id }
+                val visible = remote?.let { saved ->
+                    saved.regenerations.firstOrNull { it.id == saved.selectedRegenerationId }?.content ?: saved.content
+                }
+                visible == normalized
+            }
+            if (reconciled == true) return@mutateMessage
+            if (reconciled == null) {
+                withContext(NonCancellable) {
+                    database.withTransaction {
+                        messageDao.update(message)
+                        selected?.let { regenerationDao.insert(it) }
+                        conversation?.let { conversationDao.upsert(it) }
+                    }
                 }
             }
             throw error
@@ -475,11 +514,18 @@ class ChatRepository @Inject constructor(
             // Keep the tapped identity even while the visible transcript changes.
             chatApi.rewind(message.id)
         } catch (error: Throwable) {
-            withContext(NonCancellable) {
-                database.withTransaction {
-                    messageDao.insertAll(removed)
-                    regenerationDao.insertAll(removedRegenerations)
-                    conversation?.let { conversationDao.upsert(it) }
+            val reconciled = if (error is CancellationException) null else reconcileMutation(message.conversationId) { detail ->
+                val target = detail.messages.firstOrNull { it.id == message.id }
+                target != null && detail.messages.none { it.position > target.position }
+            }
+            if (reconciled == true) return@mutateMessage
+            if (reconciled == null) {
+                withContext(NonCancellable) {
+                    database.withTransaction {
+                        messageDao.insertAll(removed)
+                        regenerationDao.insertAll(removedRegenerations)
+                        conversation?.let { conversationDao.upsert(it) }
+                    }
                 }
             }
             throw error
@@ -528,14 +574,34 @@ class ChatRepository @Inject constructor(
         try {
             chatApi.selectRegeneration(message.id, SelectRegenerationRequestDto(selectedId))
         } catch (error: Throwable) {
-            withContext(NonCancellable) {
-                database.withTransaction {
-                    messageDao.update(message)
-                    conversation?.let { conversationDao.upsert(it) }
+            val reconciled = if (error is CancellationException) null else reconcileMutation(message.conversationId) { detail ->
+                detail.messages.firstOrNull { it.id == message.id }?.let { it.selectedRegenerationId == selectedId } == true
+            }
+            if (reconciled == true) return@mutateMessage
+            if (reconciled == null) {
+                withContext(NonCancellable) {
+                    database.withTransaction {
+                        messageDao.update(message)
+                        conversation?.let { conversationDao.upsert(it) }
+                    }
                 }
             }
             throw error
         }
+    }
+
+    // A lost HTTP response does not mean the write failed. Read the committed
+    // transcript while still holding the operation lock before undoing anything.
+    private suspend fun reconcileMutation(
+        conversationId: String,
+        isApplied: (ConversationDetailDto) -> Boolean
+    ): Boolean? {
+        val detail = withTimeoutOrNull(4_000) {
+            captureResult { conversationApi.getConversation(conversationId) }.getOrNull()
+        } ?: return null
+        database.withTransaction { applyRemoteConversationDetail(detail) }
+        syncRemoteRun(detail)
+        return isApplied(detail)
     }
 
     private suspend fun finishInterruptedRun(conversationId: String, draftKey: String, runId: String) {
@@ -671,7 +737,8 @@ class ChatRepository @Inject constructor(
             throw SendMessageFailedException(
                 accepted = accepted,
                 message = error.message ?: "Message send failed.",
-                cause = error
+                cause = error,
+                userMessageId = userMessageId
             )
         } finally {
             if (!terminalReceived && acceptedRunId != null) {
@@ -1007,6 +1074,11 @@ class ChatRepository @Inject constructor(
         messageDao.deleteCommittedByConversation(detail.id)
         messageDao.insertAll(detail.messages.map { it.toEntity(MessageSendState.SENT) })
         regenerationDao.insertAll(detail.messages.flatMap { message -> message.regenerations.map { it.toEntity() } })
+        // A process death before accepted_send leaves PENDING rows with no job.
+        // A successful refresh either commits those IDs above or makes them retryable.
+        messageDao.getLocalOnlyMessages(detail.id)
+            .filter { it.sendState == MessageSendState.PENDING.name }
+            .forEach { markMessageFailed(it.id) }
     }
 
     private suspend fun markMessageFailed(messageId: String) {

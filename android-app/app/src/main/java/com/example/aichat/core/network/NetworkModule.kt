@@ -11,6 +11,7 @@ import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Dispatcher
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 
@@ -71,11 +72,16 @@ object NetworkModule {
     fun provideHomeApi(retrofit: Retrofit): HomeApi = retrofit.create(HomeApi::class.java)
 
     @Provides
-    fun provideConversationApi(retrofit: Retrofit): ConversationApi = retrofit.create(ConversationApi::class.java)
+    fun provideConversationApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ConversationApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder().dispatcher(Dispatcher()).build())
+        .build().create(ConversationApi::class.java)
 
     @Provides
     fun provideChatApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ChatApi = retrofit.newBuilder()
         .client(okHttpClient.newBuilder()
+            // Slow image/voice requests must not occupy the queue used by
+            // Stop, Edit and Rewind. Connection pooling and auth are still shared.
+            .dispatcher(Dispatcher())
             .readTimeout(12, TimeUnit.SECONDS)
             .callTimeout(15, TimeUnit.SECONDS)
             .build())

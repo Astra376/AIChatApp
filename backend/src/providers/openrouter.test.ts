@@ -169,10 +169,37 @@ describe("stalled stream recovery", () => {
     }))));
     const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
     const rejection = expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(61_000);
     await rejection;
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("allows prefill before the first token without restarting a healthy response", async () => {
+    vi.useFakeTimers();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({
+      start(value) { controller = value; }
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const chunks: string[] = [];
+    const operation = (async () => { for await (const text of streamChatText(env, [])) chunks.push(text); })();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Ready"}}]}\n\ndata: [DONE]\n\n'));
+    await operation;
+    expect(chunks).toEqual(["Ready"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a lost terminal event after partial text without generating a second answer", async () => {
+    const fetchMock = vi.fn(async () => new Response(streamFromText(
+      'data: {"choices":[{"delta":{"content":"Partial"}}]}\n\n'
+    )));
+    vi.stubGlobal("fetch", fetchMock);
+    const operation = (async () => { for await (const _ of streamChatText(env, [])) { /* consume */ } })();
+    await expect(operation).rejects.toMatchObject({ code: "MODEL_PROVIDER_UNAVAILABLE" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("ends a stalled partial reply without starting another model response", async () => {

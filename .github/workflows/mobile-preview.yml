@@ -73,11 +73,15 @@ jobs:
           mkdir -p android-app/app/build/generated/image-fixtures
           curl --fail --silent --show-error --retry 2 --max-time 30 'https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Ftransparent_body_20260907_v1_anime_gpt.png' -o android-app/app/build/generated/image-fixtures/character-body.png
           echo '15a68e802ce848f3d2ca50013350b49a94510fa87bc3cd8d12689928fbc4396f  android-app/app/build/generated/image-fixtures/character-body.png' | sha256sum --check
-      - name: Build requested quick phone APK
+      - name: Verify chat recovery and build quick phone APK
         if: contains(github.event.head_commit.message, '[quick-preview]')
         working-directory: android-app
         run: >-
-          bash ./gradlew --no-daemon --max-workers=2 assembleRelease
+          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest
+          --tests com.example.aichat.feature.chat.ChatRepositoryTest
+          --tests com.example.aichat.core.network.WorkerStreamingClientTest
+          --tests com.example.aichat.core.network.ChatRequestQueueTest
+          assembleRelease
           -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
           -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}

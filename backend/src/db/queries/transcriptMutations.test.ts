@@ -26,7 +26,9 @@ function database() {
     prepare(sql: string) {
       return { bind(...args: any[]) { return {
         async run() {
-          const result = sqlite.prepare(sql).run(...args);
+          const statement = sqlite.prepare(sql);
+          if (statement.columns().length) return { success: true, results: statement.all(...args), meta: { changes: 0 } };
+          const result = statement.run(...args);
           return { success: true, meta: { changes: Number(result.changes) } };
         },
         async all() { return { results: sqlite.prepare(sql).all(...args) }; }
@@ -56,7 +58,8 @@ describe("atomic transcript changes", () => {
       expect(sqlite.prepare("SELECT id FROM assistant_regenerations").all().map((row) => row.id)).toEqual(["version-1"]);
       expect(sqlite.prepare("SELECT version FROM conversations").get()?.version).toBe(1);
       // A stale request for a removed ID cannot reinterpret its position.
-      await rewindToMessageAtomically(env, "owner", "conversation", "assistant-2", 3);
+      await expect(rewindToMessageAtomically(env, "owner", "conversation", "assistant-2", 3))
+        .rejects.toMatchObject({ status: 409, code: "TRANSCRIPT_CHANGED" });
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM messages").get()?.count).toBe(2);
     } finally { sqlite.close(); }
   });
@@ -89,11 +92,13 @@ describe("atomic transcript changes", () => {
       sqlite.exec("UPDATE conversations SET active_run_id='run', active_run_expires_at=500");
       expect(await editMessageAtomically(env, "owner", "conversation", "assistant-1", "Edited", 1)).toBe(false);
       expect(await selectRegenerationAtomically(env, "owner", "conversation", "assistant-2", "version-2", 1)).toBe(false);
-      await rewindToMessageAtomically(env, "owner", "conversation", "assistant-1", 1);
+      await expect(rewindToMessageAtomically(env, "owner", "conversation", "assistant-1", 1))
+        .rejects.toMatchObject({ status: 409, code: "TRANSCRIPT_CHANGED" });
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM messages").get()?.count).toBe(4);
       sqlite.exec("UPDATE conversations SET active_run_id=NULL");
       expect(await editMessageAtomically(env, "intruder", "conversation", "assistant-1", "Edited", 1)).toBe(false);
-      await rewindToMessageAtomically(env, "intruder", "conversation", "assistant-1", 1);
+      await expect(rewindToMessageAtomically(env, "intruder", "conversation", "assistant-1", 1))
+        .rejects.toMatchObject({ status: 409, code: "TRANSCRIPT_CHANGED" });
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM messages").get()?.count).toBe(4);
       expect(sqlite.prepare("SELECT version FROM conversations").get()?.version).toBe(0);
     } finally { sqlite.close(); }

@@ -468,6 +468,7 @@ class ChatRepositoryTest {
 
     @Test
     fun sendMessage_eofAfterPartialDelta_failsAndClearsOnlyItsDraft() = runTest {
+        conversationApi.failure = java.io.IOException("offline")
         seedConversation(version = 1)
         streamingClient.sendHandler = { conversationId, userMessageId, _ ->
             flow {
@@ -504,6 +505,7 @@ class ChatRepositoryTest {
 
     @Test
     fun continueAssistant_eofAfterPartialDelta_failsAndClearsDraft() = runTest {
+        conversationApi.failure = java.io.IOException("offline")
         seedConversation(version = 1)
         streamingClient.continueHandler = {
             flow {
@@ -521,6 +523,7 @@ class ChatRepositoryTest {
 
     @Test
     fun regenerateLatestAssistant_eofAfterPartialDelta_failsAndClearsDraft() = runTest {
+        conversationApi.failure = java.io.IOException("offline")
         seedConversation(version = 1)
         messageDao.insert(
             sentMessage(
@@ -708,6 +711,7 @@ class ChatRepositoryTest {
 
     @Test
     fun editMessage_showsImmediately_andRestoresOriginalOnFailure() = runTest {
+        conversationApi.failure = java.io.IOException("offline")
         seedConversation(version = 1)
         val original = sentMessage("assistant-1", 1, "ASSISTANT", "original", 100, 100)
         messageDao.insert(original)
@@ -754,6 +758,7 @@ class ChatRepositoryTest {
 
     @Test
     fun rewindFailure_restoresRemovedMessagesAndVariants() = runTest {
+        conversationApi.failure = java.io.IOException("offline")
         seedConversation(version = 1)
         val messages = (1..3).map {
             sentMessage("message-$it", it, "ASSISTANT", "message $it", it.toLong(), it.toLong())
@@ -880,6 +885,92 @@ class ChatRepositoryTest {
 
         assertThat(chatApi.stoppedReplies).isEmpty()
         assertThat(repository.observeActiveStream(CONVERSATION_ID).first()?.runId).isEqualTo("new-run")
+    }
+
+    @Test
+    fun recoveredRun_pollsCompletionAndUnlocksEditing_withoutWaitingForLeaseExpiry() = kotlinx.coroutines.runBlocking {
+        seedConversation(version = 1)
+        conversationApi.detail = conversationDetail(emptyList()).copy(
+            activeRunId = "remote-run", activeRunExpiresAt = System.currentTimeMillis() + 60_000)
+        repository.refreshConversation(CONVERSATION_ID).getOrThrow()
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()?.remoteOnly).isTrue()
+        conversationApi.detail = conversationDetail(listOf(
+            remoteMessage("recovered-reply", 1, "assistant", "Finished on server", 100, 100)))
+
+        kotlinx.coroutines.withTimeout(8_000) {
+            repository.observeActiveStream(CONVERSATION_ID).first { it == null }
+        }
+        assertThat(messageDao.getById("recovered-reply")?.content).isEqualTo("Finished on server")
+        repository.editMessage("recovered-reply", "Edited").getOrThrow()
+    }
+
+    @Test
+    fun lostCompletion_recoversSavedReplyInsideRepository() = runTest {
+        seedConversation(version = 1)
+        conversationApi.detail = conversationDetail(listOf(
+            remoteMessage("recovered-reply", 1, "assistant", "Full saved reply", 100, 100)))
+        streamingClient.continueHandler = {
+            flow {
+                emit(ChatStreamEvent.AcceptedContinue("run-lost", 1, "recovered-reply"))
+                emit(ChatStreamEvent.Delta("run-lost", "Full"))
+                throw java.io.IOException("connection lost")
+            }
+        }
+        assertThat(repository.continueAssistant(CONVERSATION_ID).isFailure).isTrue()
+        assertThat(messageDao.getById("recovered-reply")?.content).isEqualTo("Full saved reply")
+        assertThat(repository.observeActiveStream(CONVERSATION_ID).first()).isNull()
+    }
+
+    @Test
+    fun lostAcceptance_recognizesCommittedUserMessage_insteadOfOfferingDuplicateSend() = runTest {
+        seedConversation(version = 1)
+        streamingClient.sendHandler = { _, userMessageId, content ->
+            flow {
+                conversationApi.detail = conversationDetail(listOf(
+                    remoteMessage(userMessageId, 1, "user", content, 100, 100)))
+                throw java.io.IOException("acceptance lost")
+            }
+        }
+        val error = repository.sendMessage(CONVERSATION_ID, "Hello").exceptionOrNull() as SendMessageFailedException
+        assertThat(error.accepted).isTrue()
+        assertThat(messageDao.getMessages(CONVERSATION_ID).single().sendState).isEqualTo(MessageSendState.SENT.name)
+    }
+
+    @Test
+    fun interruptedPendingSend_becomesRetryableAfterRefresh_andDoesNotBlockTranscript() = runTest {
+        seedConversation(version = 1)
+        messageDao.insert(sentMessage("orphan", -1, "USER", "unsent draft", 100, 100)
+            .copy(sendState = MessageSendState.PENDING.name))
+        conversationApi.detail = conversationDetail(listOf(
+            remoteMessage("assistant-1", 0, "assistant", "Hello", 50, 50)))
+        repository.refreshConversation(CONVERSATION_ID).getOrThrow()
+        assertThat(messageDao.getById("orphan")?.sendState).isEqualTo(MessageSendState.FAILED.name)
+        repository.selectRegeneration("assistant-1", ChatRepository.ORIGINAL_VARIANT_ID).getOrThrow()
+    }
+
+    @Test
+    fun rewindWithLostResponse_keepsServerResult_insteadOfRestoringDeletedHistory() = runTest {
+        seedConversation(version = 1)
+        messageDao.insertAll((1..3).map {
+            sentMessage("message-$it", it, "ASSISTANT", "message $it", it.toLong(), it.toLong())
+        })
+        conversationApi.detail = conversationDetail(listOf(
+            remoteMessage("message-1", 1, "assistant", "message 1", 1, 1)))
+        chatApi.rewindHandler = { throw java.io.IOException("response lost after commit") }
+        repository.rewind("message-1").getOrThrow()
+        assertThat(messageDao.getMessages(CONVERSATION_ID).map { it.id }).containsExactly("message-1")
+        assertThat(repository.observeMutationBusy(CONVERSATION_ID).first()).isFalse()
+    }
+
+    @Test
+    fun editWithLostResponse_keepsCommittedText() = runTest {
+        seedConversation(version = 1)
+        messageDao.insert(sentMessage("assistant-1", 1, "ASSISTANT", "original", 100, 100))
+        conversationApi.detail = conversationDetail(listOf(
+            remoteMessage("assistant-1", 1, "assistant", "edited", 100, 200)))
+        chatApi.editHandler = { _, _ -> throw java.io.IOException("response lost after commit") }
+        repository.editMessage("assistant-1", "edited").getOrThrow()
+        assertThat(messageDao.getById("assistant-1")?.content).isEqualTo("edited")
     }
 
     private suspend fun seedConversation(version: Long) {

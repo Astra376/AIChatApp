@@ -9,7 +9,8 @@ enum class ActiveStreamMode {
 enum class ActiveStreamStatus {
     STREAMING,
     STOPPING,
-    STOPPED
+    STOPPED,
+    COMPLETED
 }
 
 data class ActiveAssistantStream(
@@ -18,9 +19,13 @@ data class ActiveAssistantStream(
     val runId: String? = null,
     val mode: ActiveStreamMode,
     val assistantMessageId: String? = null,
+    val regenerationId: String? = null,
     val targetMessageId: String? = null,
     val userMessageId: String? = null,
     val text: String = "",
     val accepted: Boolean = false,
-    val status: ActiveStreamStatus = ActiveStreamStatus.STREAMING
+    val status: ActiveStreamStatus = ActiveStreamStatus.STREAMING,
+    val remoteOnly: Boolean = false,
+    val generationStatus: String = "Replying",
+    val modelLabel: String = "Meek Standard"
 )

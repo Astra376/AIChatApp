@@ -1,5 +1,7 @@
 package com.example.aichat.feature.chat
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -16,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -62,6 +63,8 @@ fun CharacterSubpageHost(
     onViewCreatorProfile: (String) -> Unit,
     onRefreshChat: () -> Unit,
     onStartNewChat: () -> Unit,
+    onChatPreferences: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     onError: (String) -> Unit = {},
     onShareCharacter: ((CharacterSummary) -> Unit)? = null
 ) {
@@ -111,6 +114,8 @@ fun CharacterSubpageHost(
                         onDismissRequest()
                         onRefreshChat()
                     },
+                    onChatPreferences = { onDismissRequest(); onChatPreferences() },
+                    onOpenPersonas = { onDismissRequest(); onOpenPersonas() },
                     onStartNewChat = {
                         onDismissRequest()
                         onStartNewChat()
@@ -131,6 +136,8 @@ private fun CharacterDetailsRoute(
     onShare: (CharacterSummary) -> Unit,
     onRefreshChat: () -> Unit,
     onStartNewChat: () -> Unit,
+    onChatPreferences: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     onError: (String) -> Unit,
     viewModel: CharacterProfileViewModel
 ) {
@@ -149,6 +156,8 @@ private fun CharacterDetailsRoute(
         onToggleLike = viewModel::toggleLike,
         onRefreshChat = onRefreshChat,
         onStartNewChat = onStartNewChat,
+        onChatPreferences = onChatPreferences,
+        onOpenPersonas = onOpenPersonas,
         onRetry = viewModel::refresh
     )
 }
@@ -163,6 +172,8 @@ internal fun CharacterDetailsContent(
     onToggleLike: () -> Unit,
     onRefreshChat: () -> Unit,
     onStartNewChat: () -> Unit,
+    onChatPreferences: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     onRetry: () -> Unit
 ) {
     val character = state.character
@@ -205,7 +216,9 @@ internal fun CharacterDetailsContent(
                 onShare = onShare,
                 onToggleLike = onToggleLike,
                 onRefreshChat = onRefreshChat,
-                onStartNewChat = onStartNewChat
+                onStartNewChat = onStartNewChat,
+                onChatPreferences = onChatPreferences,
+                onOpenPersonas = onOpenPersonas
             )
 
             state.isLoading -> Box(
@@ -243,7 +256,9 @@ private fun CharacterDetailsBody(
     onShare: (CharacterSummary) -> Unit,
     onToggleLike: () -> Unit,
     onRefreshChat: () -> Unit,
-    onStartNewChat: () -> Unit
+    onStartNewChat: () -> Unit,
+    onChatPreferences: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -340,6 +355,8 @@ private fun CharacterDetailsBody(
                 },
                 onClick = { onViewCreator(character.ownerUserId) }
             )
+            SecondaryButton(text = "Persona", modifier = Modifier.fillMaxWidth(), onClick = onOpenPersonas)
+            SecondaryButton(text = "Chat preferences", modifier = Modifier.fillMaxWidth(), onClick = onChatPreferences)
             SecondaryButton(
                 text = "Refresh this chat",
                 modifier = Modifier.fillMaxWidth(),

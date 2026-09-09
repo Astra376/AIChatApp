@@ -94,7 +94,10 @@ data class CharacterWriteRequestDto(
     val systemPrompt: String,
     val definitionPrivate: Boolean,
     val visibility: String,
-    val avatarUrl: String? = null
+    val avatarUrl: String? = null,
+    val voiceId: String? = null,
+    val psychologyDefaults: CharacterPsychologyDefaultsDto? = null,
+    val defaultPersona: CharacterDefaultPersonaDto? = null
 )
 
 @Serializable
@@ -139,7 +142,9 @@ data class ConversationDetailDto(
     val ownerUserId: String,
     val conversationVersion: Long,
     val character: CharacterDto,
-    val messages: List<MessageDto>
+    val messages: List<MessageDto>,
+    val activeRunId: String? = null,
+    val activeRunExpiresAt: Long? = null
 )
 
 @Serializable
@@ -147,13 +152,24 @@ data class CharacterMemoryDto(
     val conversationId: String,
     val shortTerm: String,
     val longTerm: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val midTerm: String = "",
+    val limits: MemoryLimitsDto = MemoryLimitsDto(),
+    val tier: String = "standard",
+    val scene: MemorySceneDto = MemorySceneDto(),
+    val emotion: CharacterEmotionDto? = null,
+    val personality: CharacterPersonalityDto? = null,
+    val psychology: CharacterPsychologyDto? = null
 )
 
 @Serializable
 data class UpdateCharacterMemoryRequestDto(
     val shortTerm: String,
-    val longTerm: String
+    val longTerm: String,
+    val midTerm: String? = null,
+    val emotion: CharacterEmotionDto? = null,
+    val personality: CharacterPersonalityDto? = null,
+    val psychology: CharacterPsychologyDto? = null
 )
 
 @Serializable
@@ -180,7 +196,9 @@ data class SelectRegenerationRequestDto(
 
 @Serializable
 data class GeneratePortraitRequestDto(
-    val prompt: String
+    val prompt: String,
+    val preview: Boolean = false,
+    val sourceAvatarUrl: String? = null
 )
 
 @Serializable
@@ -201,18 +219,23 @@ data class GenerateGreetingResponseDto(
 
 @Serializable
 data class GenerateChatBackgroundRequestDto(
-    val prompt: String,
-    val requestKey: String? = null
+    val prompt: String = "",
+    val requestKey: String? = null,
+    val conversationId: String? = null
 )
 
 @Serializable
 data class GenerateChatBackgroundResponseDto(
-    val imageUrl: String
+    val imageUrl: String,
+    val sceneKey: String = "",
+    val prompt: String = ""
 )
 
 @Serializable
 data class StreamEventDto(
     val type: String,
+    val status: String? = null,
+    val model: String? = null,
     val runId: String? = null,
     val conversationVersion: Long? = null,
     val userMessage: MessageDto? = null,
@@ -232,3 +255,12 @@ data class CursorPageDto<T>(
     val items: List<T>,
     val nextCursor: String? = null
 )
+
+@Serializable
+data class StopChatRequestDto(val runId: String, val partialReply: StoppedReplyDto? = null)
+
+@Serializable
+data class StoppedReplyDto(val messageId: String, val text: String, val regenerate: Boolean = false)
+
+@kotlinx.serialization.Serializable
+data class TrendingSearchesResponseDto(val queries: List<String> = emptyList())

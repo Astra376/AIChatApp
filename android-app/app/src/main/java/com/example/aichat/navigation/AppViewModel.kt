@@ -19,7 +19,9 @@ import kotlinx.coroutines.launch
 class AppViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     profileRepository: ProfileRepository,
-    settingsRepository: SettingsRepository
+    settingsRepository: SettingsRepository,
+    val notifications: com.example.aichat.feature.activity.NotificationRepository,
+    val appearance: com.example.aichat.feature.customization.AppearanceRepository
 ) : ViewModel() {
     val sessionState: StateFlow<SessionUiState> = authRepository.sessionState
 

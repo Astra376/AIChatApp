@@ -8,32 +8,26 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.example.aichat.core.auth.AuthRepository
-import com.example.aichat.core.design.AppIcon
-import com.example.aichat.core.design.AppIcons
 import com.example.aichat.core.design.SecondaryButton
 import com.example.aichat.core.model.CharacterSummary
 import com.example.aichat.core.ui.AppChrome
 import com.example.aichat.core.ui.CharacterSummaryCardPlaceholder
 import com.example.aichat.core.ui.CharacterSummaryCard
+import com.example.aichat.core.ui.rememberCharacterChatLauncher
 import com.example.aichat.core.ui.ScreenBackgroundBox
-import com.example.aichat.core.network.userFacingMessage
-import com.example.aichat.core.ui.SimplePageHeader
-import com.example.aichat.core.ui.MainPageHeader
 import com.example.aichat.core.ui.screenContentPadding
 import com.example.aichat.feature.chatlist.ConversationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -92,12 +86,21 @@ class HomeViewModel @Inject constructor(
 
     fun loadMore() {
         val state = _uiState.value
+        if (state.isFeedLoading || state.feedCursor == null) return
+        _uiState.value = state.copy(isFeedLoading = true)
         viewModelScope.launch {
-            runCatching { homeRepository.loadFeed(cursor = state.feedCursor) }
-                .onSuccess { page ->
-                    _uiState.value = state.copy(feed = state.feed + page.items, feedCursor = page.nextCursor)
-                }
-                .onFailure { _events.emit("Couldn't load more characters.") }
+            try {
+                val page = homeRepository.loadFeed(cursor = state.feedCursor)
+                _uiState.value = _uiState.value.copy(
+                    feed = (state.feed + page.items).distinctBy { it.id },
+                    feedCursor = page.nextCursor
+                )
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _events.emit("Couldn't load more characters.")
+            } finally {
+                _uiState.value = _uiState.value.copy(isFeedLoading = false)
+            }
         }
     }
 
@@ -116,7 +119,11 @@ fun HomeRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val chatLauncher = rememberCharacterChatLauncher(
+        ensureConversation = viewModel::ensureConversation,
+        onOpenConversation = onOpenConversation,
+        snackbarHostState = snackbarHostState
+    )
     LaunchedEffect(Unit) {
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
     }
@@ -134,7 +141,7 @@ fun HomeRoute(
 
             if (state.isFeedLoading && state.feed.isEmpty()) {
                 items(8) {
-                    CharacterSummaryCardPlaceholder(modifier = Modifier.fillMaxWidth())
+                    CharacterSummaryCardPlaceholder(modifier = Modifier.fillMaxWidth(), imageAspectRatio = 1f)
                 }
             }
 
@@ -150,16 +157,12 @@ fun HomeRoute(
             items(state.feed, key = { it.id }) { character ->
                 CharacterSummaryCard(
                     character = character,
+                    isOpening = chatLauncher.openingCharacterId == character.id,
+                    enabled = chatLauncher.openingCharacterId == null,
                     modifier = Modifier.fillMaxWidth(),
                     imageAspectRatio = 1f
                 ) {
-                    scope.launch {
-                        viewModel.ensureConversation(character.id)
-                            .onSuccess(onOpenConversation)
-                            .onFailure {
-                                snackbarHostState.showSnackbar(it.userFacingMessage("Couldn't open chat."))
-                            }
-                    }
+                    chatLauncher.open(character.id)
                 }
             }
             if (state.feedCursor != null) {

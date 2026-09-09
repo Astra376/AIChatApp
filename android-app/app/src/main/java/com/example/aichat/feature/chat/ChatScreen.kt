@@ -1,5 +1,18 @@
 package com.example.aichat.feature.chat
 
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,20 +27,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,13 +57,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.animation.Crossfade
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -62,9 +79,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
@@ -77,6 +95,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.aichat.core.auth.AuthRepository
 import com.example.aichat.core.design.AppIcon
 import com.example.aichat.core.design.AppIcons
@@ -105,6 +124,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -112,9 +132,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+private data class ComposerState(val text: String, val starting: Boolean, val mutating: Boolean, val haptics: Boolean)
 
 private const val CHAT_MESSAGE_PAGE_SIZE = 20
 private val CHAT_COMPOSER_INITIAL_HEIGHT = 48.dp
@@ -126,7 +149,9 @@ data class ChatUiState(
     val currentUserName: String = "You",
     val currentUserAvatarUrl: String? = null,
     val canLoadOlderMessages: Boolean = false,
-    val isStartingNewChat: Boolean = false
+    val isStartingNewChat: Boolean = false,
+    val isMutating: Boolean = false,
+    val streamingHaptics: Boolean = true
 ) {
     val isStreaming: Boolean
         get() = activeStream?.status == ActiveStreamStatus.STREAMING
@@ -146,46 +171,44 @@ class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     private val conversationRepository: com.example.aichat.feature.chatlist.ConversationRepository,
     private val chatBackgroundRepository: ChatBackgroundRepository,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    settingsRepository: com.example.aichat.feature.profile.SettingsRepository,
+    private val personaIdentity: com.example.aichat.feature.persona.PersonaIdentityRepository
 ) : ViewModel() {
     private val conversationId: String = checkNotNull(savedStateHandle["conversationId"])
-    private val composerText = MutableStateFlow("")
+    fun finishDisplaying(draftKey: String) = chatRepository.finishDisplaying(conversationId, draftKey)
+    private val composerText = MutableStateFlow(savedStateHandle.get<String>("composerDraft").orEmpty())
+    private val composerSavedState = savedStateHandle
+    var editorText by mutableStateOf(composerText.value)
+        private set
     private val isStartingNewChat = MutableStateFlow(false)
     private val loadedMessageLimit = MutableStateFlow(CHAT_MESSAGE_PAGE_SIZE)
     private val _events = MutableSharedFlow<String>()
     private var activeStreamJob: Job? = null
     private var backgroundRepairAttempted = false
+    private var backgroundRefreshJob: Job? = null
     val events = _events.asSharedFlow()
 
-    init {
-        viewModelScope.launch {
-            chatRepository.refreshConversation(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't load conversation.")) }
-            chatBackgroundRepository.ensureInitialBackground(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't generate background scene.")) }
-            conversationRepository.markConversationRead(conversationId)
-        }
-    }
-
     val uiState: StateFlow<ChatUiState> = combine(
-        loadedMessageLimit.flatMapLatest { limit ->
-            chatRepository.observeConversation(conversationId, limit)
-        },
+        combine(loadedMessageLimit, authRepository.sessionState) { limit, session -> limit to session.profile?.userId.orEmpty() }
+            .flatMapLatest { (limit, owner) -> chatRepository.observeConversation(conversationId, limit, owner) },
         chatRepository.observeActiveStream(conversationId),
-        combine(composerText, isStartingNewChat) { composer, startingNewChat ->
-            composer to startingNewChat
+        combine(composerText, isStartingNewChat, chatRepository.observeMutationBusy(conversationId), settingsRepository.streamingHaptics) { composer, startingNewChat, mutating, haptics ->
+            ComposerState(composer, startingNewChat, mutating, haptics)
         },
-        authRepository.sessionState,
+        combine(authRepository.sessionState, personaIdentity.observeName(conversationId)) { session, name -> session to name },
         chatRepository.observeMessageCount(conversationId)
-    ) { conversation, activeStream, composerState, session, messageCount ->
+    ) { conversation, activeStream, composerState, identity, messageCount ->
         ChatUiState(
             conversation = conversation,
-            activeStream = activeStream,
-            composerText = composerState.first,
-            currentUserName = session.profile?.displayName ?: "You",
-            currentUserAvatarUrl = session.profile?.avatarUrl,
+            activeStream = activeStream.takeIf { conversation != null },
+            composerText = composerState.text,
+            currentUserName = identity.second ?: identity.first.profile?.displayName ?: "You",
+            currentUserAvatarUrl = identity.first.profile?.avatarUrl,
             canLoadOlderMessages = conversation != null && conversation.messages.size < messageCount,
-            isStartingNewChat = composerState.second
+            isStartingNewChat = composerState.starting,
+            isMutating = composerState.mutating,
+            streamingHaptics = composerState.haptics
         )
     }.stateIn(
         scope = viewModelScope,
@@ -193,8 +216,23 @@ class ChatViewModel @Inject constructor(
         initialValue = ChatUiState()
     )
 
+    init {
+        viewModelScope.launch { personaIdentity.ensureLoaded(conversationId) }
+        viewModelScope.launch {
+            chatRepository.refreshConversation(conversationId)
+                .onFailure { if (uiState.value.conversation == null) _events.emit(it.userFacingMessage("Couldn't load conversation.")) }
+            conversationRepository.markConversationRead(conversationId)
+            chatBackgroundRepository.ensureInitialBackground(conversationId)
+                .onFailure { android.util.Log.w("ChatBackground", "Initial background unavailable", it) }
+        }
+    }
+
+    fun reportError(message: String) { viewModelScope.launch { _events.emit(message) } }
+
     fun onComposerChanged(value: String) {
+        editorText = value
         composerText.value = value
+        composerSavedState["composerDraft"] = value
     }
 
     fun loadOlderMessages() {
@@ -202,16 +240,16 @@ class ChatViewModel @Inject constructor(
     }
 
     fun send() {
-        if (activeStreamJob?.isActive == true || uiState.value.isStreamBusy) return
+        if (activeStreamJob?.isActive == true || uiState.value.isStreamBusy || uiState.value.isMutating) return
         val text = composerText.value.trim()
         if (text.isBlank()) return
-        composerText.value = ""
+        onComposerChanged("")
         launchStreamingAction {
             chatRepository.sendMessage(conversationId, text)
                 .onFailure { error ->
                     val shouldRestoreComposer = error !is SendMessageFailedException || !error.accepted
                     if (shouldRestoreComposer && composerText.value.isBlank()) {
-                        composerText.value = text
+                        onComposerChanged(text)
                     }
                     val message = error.userFacingMessage("Message send failed.")
                     _events.emit(
@@ -232,6 +270,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatRepository.editMessage(messageId, newContent)
                 .onFailure { _events.emit(it.userFacingMessage("Edit failed.")) }
+                .onSuccess { refreshBackgroundAfterStream() }
         }
     }
 
@@ -239,6 +278,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatRepository.rewind(messageId)
                 .onFailure { _events.emit(it.userFacingMessage("Rewind failed.")) }
+                .onSuccess { refreshBackgroundAfterStream() }
         }
     }
 
@@ -265,23 +305,10 @@ class ChatViewModel @Inject constructor(
     fun stopStreaming() {
         val activeStream = uiState.value.activeStream ?: return
         if (activeStream.status != ActiveStreamStatus.STREAMING) return
-        if (!chatRepository.requestStop(conversationId, activeStream.draftKey)) return
-
-        val generationJob = activeStreamJob
-        lateinit var stopJob: Job
-        stopJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            try {
-                generationJob?.cancelAndJoin()
-                chatRepository.reconcileStoppedStream(conversationId, activeStream.draftKey)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't sync the stopped reply.")) }
-            } finally {
-                if (activeStreamJob === stopJob) {
-                    activeStreamJob = null
-                }
-            }
+        viewModelScope.launch {
+            chatRepository.stopStreaming(conversationId, activeStream.draftKey)
+                .onFailure { _events.emit(it.userFacingMessage("Couldn't stop the reply.")) }
         }
-        activeStreamJob = stopJob
-        stopJob.start()
     }
 
     fun refreshChat() {
@@ -299,7 +326,7 @@ class ChatViewModel @Inject constructor(
         backgroundRepairAttempted = true
         viewModelScope.launch {
             chatBackgroundRepository.repairFailedBackground(conversationId, failedImageUrl)
-                .onFailure { _events.emit(it.userFacingMessage("Couldn't repair the background scene.")) }
+                .onFailure { android.util.Log.w("ChatBackground", "Background repair unavailable", it) }
         }
     }
 
@@ -330,7 +357,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun launchStreamingAction(block: suspend () -> Unit) {
-        if (activeStreamJob?.isActive == true || uiState.value.isStreamBusy) return
+        if (activeStreamJob?.isActive == true || uiState.value.isStreamBusy || uiState.value.isMutating) return
         lateinit var job: Job
         job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -346,9 +373,13 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun refreshBackgroundAfterStream() {
-        viewModelScope.launch {
+        backgroundRefreshJob?.cancel()
+        backgroundRefreshJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(700)
+            // Cancel only queued work; never abandon an already billed request.
+            backgroundRefreshJob = null
             chatBackgroundRepository.refreshIfSceneChanged(conversationId)
-                .onFailure { _events.emit(it.userFacingMessage("Background scene update failed.")) }
+                .onFailure { android.util.Log.w("ChatBackground", "Background update unavailable", it) }
         }
     }
 
@@ -356,6 +387,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatRepository.selectRegeneration(messageId, regenerationId)
                 .onFailure { _events.emit(it.userFacingMessage("Couldn't switch variant.")) }
+                .onSuccess { refreshBackgroundAfterStream() }
         }
     }
 }
@@ -368,9 +400,39 @@ fun ChatRoute(
     onStartNewChat: (String) -> Unit = {},
     onOpenCharacterProfile: (String) -> Unit = {},
     onOpenCreatorProfile: (String) -> Unit = {},
+    onUpgradeUltra: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel()
 ) {
+    com.example.aichat.feature.voice.ReadAloudLifecycle()
+    val preferencesModel: ChatPreferencesViewModel = hiltViewModel()
+    val preferences by preferencesModel.preferences.collectAsStateWithLifecycle()
+    var showPreferences by remember { mutableStateOf(false) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val atmosphere: ChatAtmosphereViewModel = hiltViewModel()
+    val emotionPortrait by atmosphere.portrait.collectAsStateWithLifecycle()
+    val artwork by atmosphere.artwork.collectAsStateWithLifecycle()
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val lastMessage = state.conversation?.messages?.maxByOrNull { it.position }
+    LaunchedEffect(state.conversation?.character?.id, lastMessage?.id, lastMessage?.updatedAt, state.isStreamBusy, artwork.generating) {
+        val characterId = state.conversation?.character?.id ?: return@LaunchedEffect
+        if (!state.isStreamBusy) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            atmosphere.refresh(characterId)
+            kotlinx.coroutines.delay(2_000)
+            atmosphere.refresh(characterId)
+            kotlinx.coroutines.delay(5_000)
+            atmosphere.refresh(characterId)
+            repeat(72) {
+                if (!atmosphere.portraitsGenerating) return@repeatOnLifecycle
+                kotlinx.coroutines.delay(5_000)
+                atmosphere.refreshPortraits(characterId)
+            }
+        }
+    }
+    androidx.lifecycle.compose.LifecycleResumeEffect(preferencesModel) {
+        preferencesModel.refresh()
+        onPauseOrDispose { }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     var actionMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
@@ -380,33 +442,47 @@ fun ChatRoute(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.events.collect { snackbarHostState.showSnackbar(it) }
+        viewModel.events.collectLatest { message ->
+            if (snackbarHostState.currentSnackbarData?.visuals?.message != message) {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                snackbarHostState.showSnackbar(message, withDismissAction = true)
+            }
+        }
     }
 
-    LaunchedEffect(state.isStreamBusy) {
-        if (state.isStreamBusy) {
+    LaunchedEffect(state.isStreamBusy, state.isMutating) {
+        if (state.isStreamBusy || state.isMutating) {
             actionMessage = null
             editTarget = null
         }
     }
 
+    CompositionLocalProvider(
+        LocalChatFont provides chatFontFamily(preferences.chatFont),
+        LocalGenerationLabel provides state.activeStream?.generationStatus.orEmpty()
+    ) {
     ChatScreenContent(
         paddingValues = paddingValues,
         onBack = onBack,
         onOpenMemory = onOpenMemory,
-        state = state,
+        state = state.copy(composerText = viewModel.editorText),
+        emotionPortraitUrl = emotionPortrait,
         snackbarHostState = snackbarHostState,
         onComposerChanged = viewModel::onComposerChanged,
         onSend = viewModel::send,
         onContinue = viewModel::continueAssistant,
         onStop = viewModel::stopStreaming,
+        onStreamRevealed = viewModel::finishDisplaying,
         onRefreshChat = viewModel::refreshChat,
         onBackgroundLoadFailed = viewModel::repairBackground,
         onStartNewChat = { viewModel.startNewChat(onStartNewChat) },
         onOpenCharacterProfile = onOpenCharacterProfile,
         onOpenCreatorProfile = onOpenCreatorProfile,
+        onUpgradeUltra = onUpgradeUltra,
+        onOpenPersonas = onOpenPersonas,
+        onChatPreferences = { showPreferences = true },
         onLoadOlderMessages = viewModel::loadOlderMessages,
-        onMessageLongPress = { actionMessage = it },
+        onMessageLongPress = { if (!state.isStreamBusy && !state.isMutating) actionMessage = it },
         onSelectVariant = { message, index ->
             viewModel.selectRegeneration(message.id, message.variantIdAt(index))
         },
@@ -427,10 +503,25 @@ fun ChatRoute(
         }
     )
 
+    }
+    if (showPreferences) ChatPreferencesSheet(
+        onDismiss = { showPreferences = false }, onUpgrade = onUpgradeUltra, model = preferencesModel,
+        artwork = artwork,
+        canManageArtwork = state.conversation?.let { it.character.ownerUserId == it.ownerUserId } == true,
+        artworkBusy = atmosphere.retryingArtwork, artworkError = atmosphere.artworkError,
+        onRetryArtwork = { state.conversation?.character?.id?.let(atmosphere::retryArtwork) }
+    )
+
     actionMessage?.let { message ->
-        val isLatestAssistant = messages.firstOrNull { it.role == MessageRole.ASSISTANT && it.sendState == MessageSendState.SENT }?.id == message.id
+        val isLatestAssistant = messages.firstOrNull()?.takeIf { it.role == MessageRole.ASSISTANT && it.sendState == MessageSendState.SENT }?.id == message.id
         MessageActionsDialog(
             canRegenerate = isLatestAssistant,
+            readAloud = if (message.role == MessageRole.ASSISTANT) {
+                { com.example.aichat.feature.voice.ReadAloudButton(conversationId = message.conversationId, messageId = message.id, onError = { error ->
+                    actionMessage = null
+                    viewModel.reportError(error)
+                }) }
+            } else null,
             onDismiss = { actionMessage = null },
             onEdit = {
                 editTarget = message
@@ -492,11 +583,16 @@ internal fun ChatScreenContent(
     onSend: () -> Unit,
     onContinue: () -> Unit,
     onStop: () -> Unit = {},
+    onStreamRevealed: (String) -> Unit = {},
     onRefreshChat: () -> Unit = {},
     onBackgroundLoadFailed: (String) -> Unit = {},
     onStartNewChat: () -> Unit = {},
     onOpenCharacterProfile: (String) -> Unit = {},
     onOpenCreatorProfile: (String) -> Unit = {},
+    onUpgradeUltra: () -> Unit = {},
+    onOpenPersonas: () -> Unit = {},
+    onChatPreferences: () -> Unit = {},
+    emotionPortraitUrl: String? = null,
     onLoadOlderMessages: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
     onSelectVariant: (ChatMessage, Int) -> Unit,
@@ -508,7 +604,19 @@ internal fun ChatScreenContent(
     val density = LocalDensity.current
     var followLatest by rememberSaveable { mutableStateOf(true) }
     var autoScrolling by remember { mutableStateOf(false) }
-    var activeUserDrag by remember { mutableStateOf<DragInteraction.Start?>(null) }
+    val transcriptScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y > 0f) followLatest = false
+                return Offset.Zero
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && consumed.y < 0f &&
+                    listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 24) followLatest = true
+                return Offset.Zero
+            }
+        }
+    }
     var showCharacterDetails by rememberSaveable { mutableStateOf(false) }
 
     val messages = remember(state.conversation?.messages) {
@@ -532,10 +640,17 @@ internal fun ChatScreenContent(
     val streamDisplayText = rememberTypedStreamText(
         streamKey = activeStream?.draftKey,
         sourceText = streamSourceText,
-        animate = activeStream?.status == ActiveStreamStatus.STREAMING
+        animate = activeStream?.status == ActiveStreamStatus.STREAMING || activeStream?.status == ActiveStreamStatus.COMPLETED,
+        hapticsEnabled = state.streamingHaptics
     )
+    LaunchedEffect(activeStream?.draftKey, activeStream?.status, streamDisplayText) {
+        if (activeStream?.status == ActiveStreamStatus.COMPLETED && streamDisplayText == activeStream.text) {
+            onStreamRevealed(activeStream.draftKey)
+        }
+    }
     val showSendDraft = activeStream?.mode != ActiveStreamMode.REGENERATE &&
         activeStream != null &&
+        !activeStream.remoteOnly &&
         committedSendMessage == null
     val latestItemIndex = 0
     val oldestLoadedItemIndex = messages.size + (if (showSendDraft) 1 else 0) - 1
@@ -577,41 +692,6 @@ internal fun ChatScreenContent(
         }
     }
 
-    LaunchedEffect(listState.interactionSource) {
-        listState.interactionSource.interactions.collect { interaction ->
-            when (interaction) {
-                is DragInteraction.Start -> {
-                    activeUserDrag = interaction
-                    followLatest = false
-                }
-
-                is DragInteraction.Stop -> {
-                    if (activeUserDrag == interaction.start) activeUserDrag = null
-                }
-
-                is DragInteraction.Cancel -> {
-                    if (activeUserDrag == interaction.start) activeUserDrag = null
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-        }.collect {
-            if (!autoScrolling && !isNearBottom) {
-                followLatest = false
-            }
-        }
-    }
-
-    LaunchedEffect(isNearBottom, activeUserDrag, autoScrolling) {
-        if (isNearBottom && activeUserDrag == null && !autoScrolling) {
-            followLatest = true
-        }
-    }
-
     LaunchedEffect(
         followLatest,
         streamDisplayText.length,
@@ -628,6 +708,7 @@ internal fun ChatScreenContent(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 ChatHeader(
@@ -636,7 +717,8 @@ internal fun ChatScreenContent(
                     isLoading = state.conversation == null,
                     onBack = onBack,
                     onOpenMemory = onOpenMemory,
-                    onOpenDetails = { showCharacterDetails = true }
+                    onOpenDetails = { showCharacterDetails = true },
+                    onUpgradeUltra = onUpgradeUltra
                 )
             }
         ) { innerPadding ->
@@ -647,6 +729,7 @@ internal fun ChatScreenContent(
             ) {
                 ChatSceneBackground(
                     imageUrl = state.conversation?.backgroundSceneUrl,
+                    emotionPortraitUrl = emotionPortraitUrl,
                     onLoadFailed = onBackgroundLoadFailed
                 )
                 Column(modifier = Modifier.fillMaxSize()) {
@@ -654,12 +737,12 @@ internal fun ChatScreenContent(
                         Spacer(modifier = Modifier.weight(1f))
                     } else {
                         ChatTranscriptPane(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).nestedScroll(transcriptScroll),
                             state = listState,
                             messages = messages,
                             activeStream = activeStream,
                             streamDisplayText = streamDisplayText,
-                            isStreaming = state.isStreamBusy,
+                            isStreaming = state.isStreamBusy || state.isMutating,
                             showSendDraft = showSendDraft,
                             characterName = state.conversation.character.name,
                             characterAvatarUrl = state.conversation.character.avatarUrl,
@@ -670,7 +753,7 @@ internal fun ChatScreenContent(
                                 start = AppChrome.screenHorizontalPadding,
                                 top = innerPadding.calculateTopPadding() + 2.dp,
                                 end = AppChrome.screenHorizontalPadding,
-                                bottom = 4.dp
+                                bottom = 28.dp
                             ),
                             onJumpToLatest = {
                                 followLatest = true
@@ -688,19 +771,13 @@ internal fun ChatScreenContent(
                     ChatComposerBar(
                         composerText = state.composerText,
                         isStreaming = state.isStreaming,
-                        isStopping = state.isStopping,
+                        isStopping = state.isStopping || state.isMutating,
                         canContinue = state.conversation?.messages?.any {
                             it.sendState == MessageSendState.SENT
                         } == true,
                         onComposerChanged = onComposerChanged,
-                        onSend = {
-                            followLatest = true
-                            onSend()
-                        },
-                        onContinue = {
-                            followLatest = true
-                            onContinue()
-                        },
+                        onSend = onSend,
+                        onContinue = onContinue,
                         onStop = onStop
                     )
                 }
@@ -715,6 +792,8 @@ internal fun ChatScreenContent(
                 characterId = character.id,
                 onDismissRequest = { showCharacterDetails = false },
                 onViewCharacterProfile = onOpenCharacterProfile,
+                onChatPreferences = onChatPreferences,
+                onOpenPersonas = onOpenPersonas,
                 onViewCreatorProfile = onOpenCreatorProfile,
                 onRefreshChat = {
                     onRefreshChat()
@@ -751,8 +830,9 @@ private fun List<ChatMessage>.sortedForReverseLayout(): List<ChatMessage> {
 }
 
 @Composable
-private fun ChatSceneBackground(
+internal fun ChatSceneBackground(
     imageUrl: String?,
+    emotionPortraitUrl: String? = null,
     onLoadFailed: (String) -> Unit
 ) {
     val fallback = MaterialTheme.colorScheme.background
@@ -762,7 +842,9 @@ private fun ChatSceneBackground(
         requestedUrl?.let {
             ImageRequest.Builder(context)
                 .data(it)
-                .crossfade(700)
+                .crossfade(180)
+                .allowHardware(false)
+                .transformations(SceneBlurTransformation())
                 .build()
         }
     }
@@ -772,6 +854,7 @@ private fun ChatSceneBackground(
             .fillMaxSize()
             .background(fallback)
     ) {
+        if (request == null) com.example.aichat.core.ui.LocalAppBackdrop.current()
         if (request != null) {
             AsyncImage(
                 model = request,
@@ -800,6 +883,18 @@ private fun ChatSceneBackground(
                     )
                 )
         )
+        val bodyRequest = remember(emotionPortraitUrl, context) {
+            emotionPortraitUrl?.let { ImageRequest.Builder(context).data(it).crossfade(120).build() }
+        }
+        if (bodyRequest != null) {
+            AsyncImage(
+                model = bodyRequest,
+                contentDescription = null, contentScale = ContentScale.Fit,
+                alignment = Alignment.BottomCenter,
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.88f).align(Alignment.BottomCenter)
+            )
+        }
+
     }
 }
 
@@ -824,7 +919,8 @@ internal fun ChatTranscriptPane(
     onSelectPreviousVariant: (ChatMessage) -> Unit,
     onSelectNextVariant: (ChatMessage) -> Unit
 ) {
-    val latestAssistantId = messages.firstOrNull {
+    val latestAssistantId = messages.firstOrNull()?.takeIf {
+        (activeStream == null || activeStream.mode == ActiveStreamMode.REGENERATE || activeStream.assistantMessageId == it.id) &&
         it.role == MessageRole.ASSISTANT && it.sendState == MessageSendState.SENT
     }?.id
 
@@ -881,11 +977,12 @@ internal fun ChatTranscriptPane(
                     showTypingIndicator = (isActiveSendMessage || isActiveRegenerate) &&
                         displayContent.isBlank() &&
                         activeStream?.status == ActiveStreamStatus.STREAMING,
-                    showGenerationPage = isActiveRegenerate &&
-                        activeStream?.status == ActiveStreamStatus.STREAMING,
+                    showGenerationPage = isActiveRegenerate,
+                    generationKey = activeStream?.draftKey.takeIf { isActiveRegenerate },
+                    generationId = activeStream?.regenerationId.takeIf { isActiveRegenerate },
                     isLatestAssistant = message.id == latestAssistantId,
                     actionsEnabled = !isStreaming && message.sendState == MessageSendState.SENT,
-                    variantControlsEnabled = !isStreaming,
+                    variantControlsEnabled = !isStreaming && message.id == latestAssistantId,
                     characterName = characterName,
                     characterAvatarUrl = characterAvatarUrl,
                     currentUserName = currentUserName,
@@ -914,23 +1011,12 @@ internal fun ChatTranscriptPane(
         val edgeColor = MaterialTheme.colorScheme.background
         Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(18.dp)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(edgeColor.copy(alpha = 0.92f), Color.Transparent)
-                    )
-                )
-        )
-        Box(
-            modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(18.dp)
                 .background(
                     Brush.verticalGradient(
-                        listOf(Color.Transparent, edgeColor.copy(alpha = 0.92f))
+                        listOf(Color.Transparent, edgeColor)
                     )
                 )
         )
@@ -982,22 +1068,17 @@ private fun ChatComposerBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(background)
             .imePadding()
+            .navigationBarsPadding()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .shadow(
-                    elevation = 7.dp,
-                    shape = RectangleShape,
-                    clip = false,
-                    ambientColor = Color.Black.copy(alpha = 0.11f),
-                    spotColor = Color.Black.copy(alpha = 0.16f)
-                )
-                .background(background.copy(alpha = 0.96f))
+                .background(background)
                 .padding(
                     horizontal = AppChrome.screenHorizontalPadding,
-                    vertical = 8.dp
+                    vertical = 4.dp
                 ),
             horizontalArrangement = Arrangement.spacedBy(AppChrome.compactControlGap),
             verticalAlignment = Alignment.Bottom
@@ -1017,6 +1098,7 @@ private fun ChatComposerBar(
             val canSend = composerText.isNotBlank()
             val useContinue = !isStreaming && !isStopping && !canSend && canContinue
             IconCircleButton(
+                modifier = Modifier.background(com.example.aichat.core.design.controlSurfaceColor(false), androidx.compose.foundation.shape.CircleShape),
                 containerSize = CHAT_COMPOSER_INITIAL_HEIGHT,
                 selected = false,
                 enabled = !isStopping && (isStreaming || canSend || useContinue),
@@ -1026,24 +1108,19 @@ private fun ChatComposerBar(
                     else -> onContinue
                 }
             ) {
-                Crossfade(
-                    targetState = when {
+                AppIcon(
+                    icon = when {
                         isStreaming || isStopping -> AppIcons.stop
                         useContinue -> AppIcons.forward
                         else -> AppIcons.send
                     },
-                    label = "chat-send-icon"
-                ) { icon ->
-                    AppIcon(
-                        icon,
-                        contentDescription = when {
-                            isStreaming -> "Stop response"
-                            isStopping -> "Stopping response"
-                            useContinue -> "Continue"
-                            else -> "Send"
-                        }
-                    )
-                }
+                    contentDescription = when {
+                        isStreaming -> "Stop response"
+                        isStopping -> "Stopping response"
+                        useContinue -> "Continue"
+                        else -> "Send"
+                    }
+                )
             }
         }
     }
@@ -1056,27 +1133,21 @@ private fun ChatHeader(
     isLoading: Boolean,
     onBack: () -> Unit,
     onOpenMemory: () -> Unit,
-    onOpenDetails: () -> Unit
+    onOpenDetails: () -> Unit,
+    onUpgradeUltra: () -> Unit
 ) {
     val background = MaterialTheme.colorScheme.background
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(
-                elevation = 7.dp,
-                shape = RectangleShape,
-                clip = false,
-                ambientColor = Color.Black.copy(alpha = 0.11f),
-                spotColor = Color.Black.copy(alpha = 0.16f)
-            )
-            .background(background)
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(background)
                     .statusBarsPadding()
-                    .clickable(enabled = !isLoading, onClick = onOpenDetails)
+                    .clickable(enabled = !isLoading, onClickLabel = "Open character menu", onClick = onOpenDetails)
                     .padding(
                         horizontal = AppChrome.screenHorizontalPadding,
                         vertical = AppChrome.compactHeaderVerticalPadding
@@ -1087,8 +1158,7 @@ private fun ChatHeader(
                 Spacer(modifier = Modifier.size(AppChrome.compactControlGap))
                 Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 4.dp),
+                        .weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(AppChrome.gridSpacing),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1105,11 +1175,15 @@ private fun ChatHeader(
                         )
                         Text(
                             text = characterName,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
+                if (!com.example.aichat.feature.customization.LocalAppearance.current.ultra) androidx.compose.material3.TextButton(onClick = onUpgradeUltra,
+                    contentPadding = PaddingValues(horizontal = 8.dp)) { Text("Ultra") }
                 IconCircleButton(
                     enabled = !isLoading,
                     containerSize = AppChrome.compactControlSize,
@@ -1117,7 +1191,7 @@ private fun ChatHeader(
                 ) {
                     AppIcon(
                         icon = AppIcons.memory,
-                        contentDescription = "Character memory",
+                        contentDescription = "Character psychology",
                         size = AppChrome.headerActionIconSize
                     )
                 }
@@ -1144,6 +1218,8 @@ private fun MessageBubble(
     displayContent: String,
     showTypingIndicator: Boolean,
     showGenerationPage: Boolean,
+    generationKey: String?,
+    generationId: String?,
     isLatestAssistant: Boolean,
     actionsEnabled: Boolean,
     variantControlsEnabled: Boolean,
@@ -1159,22 +1235,20 @@ private fun MessageBubble(
     val isUser = message.role == MessageRole.USER
     val background = MaterialTheme.colorScheme.background
     val bubbleColor = if (isUser) {
-        MaterialTheme.colorScheme.surface.copy(alpha = 0.98f).compositeOver(background)
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f).compositeOver(background)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.87f)
     }
     val avatarName = if (isUser) currentUserName else characterName
     val avatarUrl = if (isUser) currentUserAvatarUrl else characterAvatarUrl
-    val variants = remember(message.content, message.regenerations, displayContent, showTypingIndicator, showGenerationPage) {
-        if (showTypingIndicator && !showGenerationPage) {
-            listOf(displayContent)
-        } else {
-            val generated = message.variantTexts()
-            if (!showGenerationPage && displayContent != message.visibleContent) listOf(displayContent) else generated
-        }
+    val frozenVariants = remember(message.id, generationKey) {
+        listOf(message.content) + message.regenerations.filterNot { it.id == generationId }.map { it.content }
+    }
+    val variants = if (generationKey != null) frozenVariants else message.variantTexts().toMutableList().apply {
+        this[message.variantIndex()] = displayContent
     }
     val currentIndex = if (variants.size == message.variantCount()) message.variantIndex() else 0
-    val hasGenerationPage = isLatestAssistant && !isUser && (variantControlsEnabled || showGenerationPage)
+    val hasGenerationPage = isLatestAssistant && !isUser
 
     if (isLatestAssistant && (variants.size > 1 || hasGenerationPage)) {
         VariantMessagePager(
@@ -1183,6 +1257,7 @@ private fun MessageBubble(
             hasGenerationPage = hasGenerationPage,
             generationPageText = if (showGenerationPage) displayContent else "",
             generationPageLoading = showGenerationPage && showTypingIndicator,
+            showingGeneration = showGenerationPage,
             generationRequestEnabled = variantControlsEnabled,
             isUser = isUser,
             avatarName = avatarName,
@@ -1224,6 +1299,7 @@ private fun VariantMessagePager(
     hasGenerationPage: Boolean,
     generationPageText: String,
     generationPageLoading: Boolean,
+    showingGeneration: Boolean,
     generationRequestEnabled: Boolean,
     isUser: Boolean,
     avatarName: String,
@@ -1237,118 +1313,84 @@ private fun VariantMessagePager(
 ) {
     val generationPage = variants.size
     val pageCount = variants.size + if (hasGenerationPage) 1 else 0
-    val pagerState = rememberPagerState(
-        initialPage = currentIndex,
-        pageCount = { pageCount }
-    )
-    val coroutineScope = rememberCoroutineScope()
-    var committedPage by remember(variants.size) {
-        mutableStateOf(currentIndex.coerceIn(variants.indices))
-    }
-    var settledVisualPage by remember(variants.size, hasGenerationPage) {
-        mutableStateOf(currentIndex.coerceIn(variants.indices))
-    }
-    var generationRequested by remember(variants.size, hasGenerationPage) {
-        mutableStateOf(false)
-    }
-    var pageHeights by remember(pageCount) {
-        mutableStateOf(List(pageCount) { 0 })
-    }
+    val pagerState = rememberPagerState(initialPage = currentIndex, pageCount = { pageCount })
+    val scope = rememberCoroutineScope()
+    val latestSelect by rememberUpdatedState(onSelectVariant)
+    val latestGenerate by rememberUpdatedState(onSelectNextVariant)
+    val latestEnabled by rememberUpdatedState(variantControlsEnabled)
+    val latestGenerationEnabled by rememberUpdatedState(generationRequestEnabled)
+    val latestGenerationPage by rememberUpdatedState(generationPage)
+    val latestShowingGeneration by rememberUpdatedState(showingGeneration)
+    var reportedPage by remember { mutableStateOf(currentIndex) }
+    var generationRequested by remember { mutableStateOf(false) }
+    val heights = remember { mutableStateMapOf<Int, Int>() }
+    val settledHeight = heights[pagerState.settledPage] ?: 0
+    val animatedHeight by animateIntAsState(settledHeight, tween(160), label = "settled-reply-height")
 
-    LaunchedEffect(pagerState, variants.size, hasGenerationPage, generationRequestEnabled) {
-        snapshotFlow { pagerState.settledPage to pagerState.isScrollInProgress }.collect { (page, isScrollInProgress) ->
-            if (isScrollInProgress) return@collect
-            when {
-                page == generationPage && hasGenerationPage -> {
-                    settledVisualPage = page
-                    if (generationRequestEnabled && !generationRequested) {
+    fun moveTo(page: Int) {
+        // The native pager's scroll must outlive transient streaming/Room state changes.
+        scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, pageCount - 1), animationSpec = tween(180)) }
+    }
+    LaunchedEffect(showingGeneration) {
+        if (showingGeneration) {
+            generationRequested = true
+            if (pagerState.currentPage != generationPage || pagerState.currentPageOffsetFraction != 0f) moveTo(generationPage)
+        }
+    }
+    LaunchedEffect(variantControlsEnabled, showingGeneration, variants.size) {
+        if (variantControlsEnabled && !showingGeneration && generationRequested) {
+            generationRequested = false
+            // A committed variant occupies the exact former draft slot.
+            if (pagerState.currentPage >= variants.size) moveTo(currentIndex)
+            reportedPage = pagerState.currentPage.coerceAtMost(variants.lastIndex)
+        }
+    }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { Triple(pagerState.settledPage, pagerState.isScrollInProgress, latestEnabled) }
+            .collect { (page, scrolling, enabled) ->
+                if (scrolling || !enabled || latestShowingGeneration) return@collect
+                if (page == latestGenerationPage) {
+                    if (latestGenerationEnabled && !generationRequested) {
                         generationRequested = true
-                        onSelectNextVariant()
+                        latestGenerate()
                     }
-                }
-                page in variants.indices -> {
-                    val shouldPersistSelection = page != committedPage
-                    settledVisualPage = page
-                    generationRequested = false
-                    if (shouldPersistSelection) {
-                        committedPage = page
-                        onSelectVariant(page)
-                    }
+                } else if (page < latestGenerationPage && page != reportedPage) {
+                    reportedPage = page
+                    latestSelect(page)
                 }
             }
-        }
     }
-
-    // Keep the pager pinned to the settled page's measured height. Switching
-    // variants updates the height immediately: no artificial reveal animation
-    // and no forced transcript scrolling when the new reply already fits.
-    val density = LocalDensity.current
-    val settledHeightPx = pageHeights.getOrElse(settledVisualPage) { 0 }
-    val isSettledHeightMeasured = settledHeightPx > 0
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
-                if (isSettledHeightMeasured) {
-                    Modifier.height(with(density) { settledHeightPx.toDp() })
-                } else {
-                    Modifier
-                }
-            )
-            .clipToBounds()
-    ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (isSettledHeightMeasured) {
-                        Modifier.wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    } else {
-                        Modifier
-                    }
-                ),
-            pageSpacing = 16.dp,
-            beyondViewportPageCount = 0,
-            verticalAlignment = Alignment.Top
-        ) { page ->
-            val isGenerationPage = page == generationPage
-            MessageVariantPage(
-                modifier = Modifier.onSizeChanged { size ->
-                    if (page in pageHeights.indices && pageHeights[page] != size.height) {
-                        pageHeights = pageHeights.toMutableList().also { heights ->
-                            heights[page] = size.height
-                        }
-                    }
-                },
-                text = if (isGenerationPage) generationPageText else variants[page],
-                pageIndex = page.coerceAtMost(variants.lastIndex),
-                pageCount = variants.size,
-                isUser = isUser,
-                avatarName = avatarName,
-                avatarUrl = avatarUrl,
-                bubbleColor = bubbleColor,
-                showTypingIndicator = isGenerationPage && (generationPageLoading || generationPageText.isBlank()),
-                showVariantControls = !isGenerationPage,
-                variantControlsEnabled = variantControlsEnabled,
-                onLongPress = onLongPress,
-                onPrevious = {
-                    if (pagerState.currentPage > 0) {
-                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
-                    } else {
-                        onSelectPreviousVariant()
-                    }
-                },
-                onNext = {
-                    if (pagerState.currentPage < variants.lastIndex) {
-                        coroutineScope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
-                    } else {
-                        coroutineScope.launch { pagerState.animateScrollToPage(generationPage) }
-                    }
-                }
-            )
-        }
+    HorizontalPager(
+        state = pagerState,
+        key = { it },
+        // Measure pages naturally, but expose only the settled page's height to
+        // the transcript. Incoming taller pages cannot move it during a drag.
+        modifier = modifier.fillMaxWidth().clipToBounds().testTag("reply-variants").layout { measurable, constraints ->
+            val child = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+            val height = if (settledHeight == 0) child.height else animatedHeight.coerceAtLeast(1)
+            layout(child.width, height) { child.placeRelative(0, 0) }
+        },
+        userScrollEnabled = variantControlsEnabled && !showingGeneration,
+        verticalAlignment = Alignment.Top
+    ) { page ->
+        val isGenerationPage = page == generationPage
+        MessageVariantPage(
+            modifier = Modifier.fillMaxWidth().onSizeChanged { if (heights[page] != it.height) heights[page] = it.height }
+                .then(if (page != pagerState.settledPage) Modifier.clearAndSetSemantics {} else Modifier),
+            text = if (isGenerationPage) generationPageText else variants[page],
+            pageIndex = page.coerceAtMost(variants.lastIndex),
+            pageCount = variants.size,
+            isUser = isUser,
+            avatarName = avatarName,
+            avatarUrl = avatarUrl,
+            bubbleColor = bubbleColor,
+            showTypingIndicator = isGenerationPage && (generationPageLoading || generationPageText.isBlank()),
+            showVariantControls = !isGenerationPage,
+            variantControlsEnabled = variantControlsEnabled,
+            onLongPress = onLongPress,
+            onPrevious = { if (!pagerState.isScrollInProgress && pagerState.currentPage > 0) moveTo(pagerState.currentPage - 1) },
+            onNext = { if (!pagerState.isScrollInProgress && pagerState.currentPage < pageCount - 1) moveTo(pagerState.currentPage + 1) }
+        )
     }
 }
 
@@ -1410,47 +1452,19 @@ private fun MessageVariantPage(
         }
 
         if (showVariantControls) {
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconCircleButton(
-                    modifier = Modifier.shadow(
-                        2.dp,
-                        RoundedCornerShape(999.dp),
-                        clip = false
-                    ),
-                    containerSize = 36.dp,
-                    enabled = variantControlsEnabled && pageIndex > 0,
-                    onClick = onPrevious
-                ) {
-                    AppIcon(AppIcons.previous, contentDescription = "Previous variant", size = 20.dp)
-                }
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                    shadowElevation = 2.dp
-                ) {
-                    Text(
-                        text = "Variant ${pageIndex + 1}/$pageCount",
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                IconCircleButton(
-                    modifier = Modifier.shadow(
-                        2.dp,
-                        RoundedCornerShape(999.dp),
-                        clip = false
-                    ),
-                    containerSize = 36.dp,
-                    enabled = variantControlsEnabled,
-                    onClick = onNext
-                ) {
-                    AppIcon(AppIcons.next, contentDescription = "Next variant", size = 20.dp)
+            Row(Modifier.padding(top = 2.dp, start = 30.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (pageCount == 1) {
+                    IconButton(onClick = onNext, enabled = variantControlsEnabled, modifier = Modifier.size(40.dp)) {
+                        AppIcon(AppIcons.refresh, "Regenerate reply", size = 20.dp)
+                    }
+                } else {
+                    IconButton(onClick = onPrevious, enabled = variantControlsEnabled && pageIndex > 0, modifier = Modifier.size(40.dp)) {
+                        AppIcon(AppIcons.previous, "Previous variant", size = 20.dp)
+                    }
+                    Text("Variant ${pageIndex + 1}/$pageCount", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    IconButton(onClick = onNext, enabled = variantControlsEnabled, modifier = Modifier.size(40.dp)) {
+                        AppIcon(AppIcons.next, "Next variant", size = 20.dp)
+                    }
                 }
             }
         }
@@ -1469,6 +1483,7 @@ private fun MessageSurfaceContent(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
             .combinedClickable(
                 onClick = {},
                 onLongClick = onLongPress
@@ -1483,7 +1498,7 @@ private fun MessageSurfaceContent(
             } else {
                 Text(
                     text = roleplayAnnotatedText(text),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = LocalChatFont.current ?: MaterialTheme.typography.bodyLarge.fontFamily),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -1517,7 +1532,7 @@ private fun DraftBubble(
             Surface(
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f).compositeOver(background),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.87f),
                 shadowElevation = 2.dp
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -1526,7 +1541,7 @@ private fun DraftBubble(
                     } else {
                         Text(
                             text = roleplayAnnotatedText(content),
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = LocalChatFont.current ?: MaterialTheme.typography.bodyLarge.fontFamily),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -1551,43 +1566,19 @@ private fun ChatMessage.variantIdAt(index: Int): String {
 private fun ChatMessage.variantTexts(): List<String> = listOf(content) + regenerations.map { it.content }
 
 @Composable
-private fun roleplayAnnotatedText(value: String) = buildAnnotatedString {
-    var index = 0
-    while (index < value.length) {
-        val triple = value.indexOf("***", index)
-        val double = value.indexOf("**", index).let { if (it >= 0 && it != triple) it else -1 }
-        val single = value.indexOf("*", index).let { if (it >= 0 && it != triple && it != double) it else -1 }
-        val next = listOf(triple, double, single).filter { it >= 0 }.minOrNull() ?: -1
-        if (next == -1) {
-            append(value.substring(index))
-            break
-        }
-        append(value.substring(index, next))
-        val marker = when (next) {
-            triple -> "***"
-            double -> "**"
-            else -> "*"
-        }
-        val end = value.indexOf(marker, next + marker.length)
-        if (end == -1) {
-            append(marker)
-            index = next + marker.length
-            continue
-        }
-        val style = when (marker) {
-            "***" -> SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
-            "**" -> SpanStyle(fontWeight = FontWeight.Bold)
-            else -> SpanStyle(fontStyle = FontStyle.Italic)
-        }
-        pushStyle(style)
-        append(value.substring(next + marker.length, end))
-        pop()
-        index = end + marker.length
-    }
-}
+private fun roleplayAnnotatedText(value: String) = formatRoleplayText(
+    value,
+    narrationColor = MaterialTheme.colorScheme.onSurface,
+    speechColor = MaterialTheme.colorScheme.onSurface
+)
 
 @Composable
 private fun TypingDotsIndicator(modifier: Modifier = Modifier) {
+    if (!com.example.aichat.core.ui.rememberDelayedLoading(true, 180)) { Spacer(modifier.height(18.dp)); return }
+    if (LocalGenerationLabel.current == "Thinking") {
+        ReasoningStatusWord(modifier)
+        return
+    }
     val transition = rememberInfiniteTransition()
     Row(
         modifier = modifier.height(18.dp),
@@ -1626,55 +1617,66 @@ private fun TypingDotsIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun rememberTypedStreamText(
+internal fun rememberTypedStreamText(
     streamKey: String?,
     sourceText: String,
-    animate: Boolean
+    animate: Boolean,
+    hapticsEnabled: Boolean
 ): String {
-    var displayedText by rememberSaveable(streamKey) {
-        mutableStateOf("")
+    // A reopened chat begins with received text. Subsequent chunks and the final
+    // normalized result advance on this one clock, independent of network timing.
+    val streamAtOpen = remember { streamKey }
+    var displayedText by remember(streamKey) {
+        mutableStateOf(if (streamKey == streamAtOpen) sourceText else "")
     }
-
+    val updates = remember(streamKey) { Channel<Pair<String, Boolean>>(Channel.CONFLATED) }
+    val latestHaptics by rememberUpdatedState(hapticsEnabled)
+    val view = LocalView.current
     LaunchedEffect(streamKey, sourceText, animate) {
-        if (streamKey == null) {
-            displayedText = sourceText
-            return@LaunchedEffect
-        }
-
-        if (sourceText.isEmpty()) {
-            displayedText = ""
-            return@LaunchedEffect
-        }
-
-        if (displayedText.length > sourceText.length) {
-            displayedText = sourceText
-        }
-
-        if (!sourceText.startsWith(displayedText)) {
-            displayedText = if (displayedText.isBlank()) {
-                ""
-            } else {
-                sourceText
+        updates.send(sourceText to animate)
+    }
+    LaunchedEffect(streamKey) {
+        if (streamKey == null) return@LaunchedEffect
+        // Input notifications wake this worker once. It owns the frame clock
+        // until the queue is empty; neither another token nor completion can
+        // restart it, and advancing a character never waits for a snapshot flow.
+        for (update in updates) {
+            var pending = update
+            var lastFrame = 0L
+            var budget = 0.0
+            while (pending.first != displayedText) {
+                val frame = withFrameNanos { it }
+                updates.tryReceive().getOrNull()?.let { pending = it }
+                val (target, shouldAnimate) = pending
+                if (!shouldAnimate) {
+                    displayedText = target
+                    budget = 0.0
+                } else {
+                    // Final formatting may revise punctuation without flushing
+                    // the characters still waiting to be revealed.
+                    var position = displayedText.length.coerceAtMost(target.length)
+                    if (position > 0 && position < target.length && Character.isLowSurrogate(target[position])) position--
+                    budget += if (lastFrame == 0L) 1.0 else ((frame - lastFrame).coerceAtMost(50_000_000L) / 1_000_000_000.0) * 60.0
+                    val available = target.codePointCount(position, target.length)
+                    val count = minOf(budget.toInt(), available)
+                    position = target.offsetByCodePoints(position, count)
+                    displayedText = target.take(position)
+                    budget = if (position == target.length) 0.0 else budget - count
+                    if (count > 0 && latestHaptics) view.performHapticFeedback(
+                        if (android.os.Build.VERSION.SDK_INT >= 34) android.view.HapticFeedbackConstants.SEGMENT_TICK else android.view.HapticFeedbackConstants.KEYBOARD_TAP
+                    )
+                }
+                lastFrame = frame
             }
         }
-
-        if (!animate) {
-            displayedText = sourceText
-            return@LaunchedEffect
-        }
-
-        while (displayedText.length < sourceText.length) {
-            delay(18L)
-            displayedText = sourceText.take(displayedText.length + 1)
-        }
     }
-
-    return displayedText
+    return if (streamKey == null) sourceText else displayedText
 }
 
 @Composable
 private fun MessageActionsDialog(
     canRegenerate: Boolean,
+    readAloud: (@Composable () -> Unit)? = null,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onRewind: () -> Unit,
@@ -1687,6 +1689,7 @@ private fun MessageActionsDialog(
         title = { Text("Message Actions") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                readAloud?.invoke()
                 Text(
                     text = "Choose how you want to adjust this message.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant

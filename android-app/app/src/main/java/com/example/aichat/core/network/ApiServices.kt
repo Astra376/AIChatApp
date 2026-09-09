@@ -37,6 +37,18 @@ interface ProfileApi {
 }
 
 interface CharacterApi {
+    @POST("v1/characters/auto-create")
+    suspend fun autoCreate(@Body body: AutoCreateCharacterRequestDto): AutoCreateCharacterDto
+
+    @GET("v1/characters/{characterId}/psychology")
+    suspend fun psychology(@Path("characterId") characterId: String): CharacterPsychologyDefaultsDto
+
+    @GET("v1/characters/{characterId}/emotion-portraits")
+    suspend fun emotionPortraits(@Path("characterId") characterId: String): EmotionPortraitsDto
+
+    @POST("v1/characters/{characterId}/emotion-portraits")
+    suspend fun generateEmotionPortraits(@Path("characterId") characterId: String): EmotionPortraitsDto
+
     @POST("v1/characters")
     suspend fun createCharacter(@Body body: CharacterWriteRequestDto): CharacterDto
 
@@ -66,6 +78,15 @@ interface CharacterApi {
 }
 
 interface HomeApi {
+    @GET("v1/home/discover")
+    suspend fun discover(): com.example.aichat.feature.home.DiscoveryDto
+
+    @GET("v1/home/discover/{categoryId}")
+    suspend fun discoverCategory(@Path("categoryId") id: String, @Query("version") version: String, @Query("cursor") cursor: String?): CursorPageDto<CharacterDto>
+
+    @GET("v1/home/trending")
+    suspend fun trendingSearches(): TrendingSearchesResponseDto
+
     @GET("v1/home/feed")
     suspend fun getFeed(@Query("cursor") cursor: String? = null): CursorPageDto<CharacterDto>
 
@@ -100,6 +121,9 @@ interface ConversationApi {
 }
 
 interface ChatApi {
+    @POST("v1/conversations/{conversationId}/stop")
+    suspend fun stopReply(@Path("conversationId") conversationId: String, @Body body: StopChatRequestDto)
+
     @PATCH("v1/messages/{messageId}")
     suspend fun editMessage(
         @Path("messageId") messageId: String,
@@ -117,6 +141,9 @@ interface ChatApi {
 }
 
 interface ImageApi {
+    @POST("v1/images/upload-character-portrait")
+    suspend fun uploadPortrait(@Body body: okhttp3.RequestBody): GeneratePortraitResponseDto
+
     @POST("v1/images/generate-character-portrait")
     suspend fun generatePortrait(@Body body: GeneratePortraitRequestDto): GeneratePortraitResponseDto
 

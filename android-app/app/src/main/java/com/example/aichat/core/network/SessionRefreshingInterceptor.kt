@@ -26,7 +26,11 @@ class SessionRefreshingInterceptor @Inject constructor(
         "${BuildConfig.API_BASE_URL}/"
     }
     private val refreshUrl = "${baseUrl}v1/auth/refresh"
-    private val refreshClient = OkHttpClient()
+    private val refreshClient = OkHttpClient.Builder()
+        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()

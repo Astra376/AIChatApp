@@ -28,6 +28,38 @@ class NewHomeConversationTest {
         assertThat(mostRecentChatPerCharacter(chats).single().id).isEqualTo("a-2")
     }
 
+    @Test
+    fun unreadRail_countsUnreadAcrossAllSessions() {
+        val chats = listOf(
+            conversation(id = "old-a", characterId = "a", updatedAt = 100)
+                .copy(unreadCount = 3, hasUnreadBadge = true),
+            conversation(id = "new-a", characterId = "a", updatedAt = 300)
+                .copy(unreadCount = 2)
+        )
+
+        val result = mostRecentUnreadChatPerCharacter(chats).single()
+
+        assertThat(result.id).isEqualTo("new-a")
+        assertThat(result.unreadCount).isEqualTo(5)
+        assertThat(result.hasUnreadBadge).isTrue()
+    }
+
+    @Test
+    fun unreadRail_opensLatestUnreadSessionWhileContinueOpensLatestSession() {
+        val chats = listOf(
+            conversation(id = "unread-old", characterId = "a", updatedAt = 100).copy(unreadCount = 2),
+            conversation(id = "unread-new", characterId = "a", updatedAt = 200).copy(unreadCount = 3),
+            conversation(id = "read-newest", characterId = "a", updatedAt = 300),
+            conversation(id = "more-unread", characterId = "b", updatedAt = 50).copy(unreadCount = 8)
+        )
+
+        assertThat(mostRecentChatPerCharacter(chats).first { it.characterId == "a" }.id).isEqualTo("read-newest")
+        val unread = mostRecentUnreadChatPerCharacter(chats)
+        assertThat(unread.map { it.id }).containsExactly("more-unread", "unread-new").inOrder()
+        assertThat(unread.map { it.unreadCount }).containsExactly(8, 5).inOrder()
+        assertThat(mostRecentUnreadChatPerCharacter(chats.map { it.copy(unreadCount = 0) })).isEmpty()
+    }
+
     private fun conversation(
         id: String,
         characterId: String,

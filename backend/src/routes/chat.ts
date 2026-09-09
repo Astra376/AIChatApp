@@ -1,4 +1,5 @@
 import {
+  cancelAssistantRun,
   continueAssistantAndStream,
   editMessage,
   regenerateLatestAssistantAndStream,
@@ -11,6 +12,22 @@ import { parseJson, requireString, requireUlid } from "../lib/validation";
 import type { RouteDefinition } from "./types";
 
 export const chatRoutes: RouteDefinition[] = [
+  {
+    method: "POST",
+    path: "/v1/conversations/:conversationId/stop",
+    auth: true,
+    handler: async (context) => {
+      const body = await parseJson<{ runId?: string; partialReply?: { messageId?: string; text?: string; regenerate?: boolean } }>(context.request);
+      const partial = body.partialReply;
+      await cancelAssistantRun(context, context.params.conversationId, requireString(body.runId, "runId", 200),
+        partial ? {
+          messageId: requireString(partial.messageId, "partialReply.messageId", 200),
+          text: requireString(partial.text, "partialReply.text", 64_000),
+          regenerate: partial.regenerate === true
+        } : undefined);
+      return noContent();
+    }
+  },
   {
     method: "POST",
     path: "/v1/conversations/:conversationId/messages/stream",

@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS character_psychology (character_id TEXT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE, defaults_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS character_emotion_portraits (character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE, emotion TEXT NOT NULL, source_url TEXT NOT NULL, image_url TEXT, job_json TEXT, status TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(character_id, emotion));
+CREATE TABLE IF NOT EXISTS character_autocreate_usage (user_id TEXT NOT NULL, day TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id, day));

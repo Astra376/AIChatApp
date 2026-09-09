@@ -1,0 +1,209 @@
+name: Phone preview
+on:
+  push:
+    branches: [main, fix/mobile-chat-reliability]
+    paths: ['android-app/**', 'backend/**', '.github/workflows/mobile-preview.yml']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_ui_tests:
+        description: Run the full emulator suite instead of focused preview checks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: phone-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend-tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      android_changed: ${{ steps.scope.outputs.android_changed }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Identify Android changes
+        id: scope
+        run: |
+          if git diff --quiet HEAD^ HEAD -- ../android-app; then
+            echo 'android_changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'android_changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - name: Validate Worker bundle
+        run: npx wrangler deploy --dry-run --outdir dist
+  android:
+    needs: backend-tests
+    if: github.event_name != 'push' || needs.backend-tests.outputs.android_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Fetch verified transparent image fixture
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
+        run: |
+          mkdir -p android-app/app/build/generated/image-fixtures
+          curl --fail --silent --show-error --retry 2 --max-time 30 'https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Ftransparent_body_20260907_v1_anime_gpt.png' -o android-app/app/build/generated/image-fixtures/character-body.png
+          echo '15a68e802ce848f3d2ca50013350b49a94510fa87bc3cd8d12689928fbc4396f  android-app/app/build/generated/image-fixtures/character-body.png' | sha256sum --check
+      - name: Verify chat recovery and build quick phone APK
+        if: contains(github.event.head_commit.message, '[quick-preview]')
+        working-directory: android-app
+        run: >-
+          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest
+          --tests com.example.aichat.feature.chat.ChatRepositoryTest
+          --tests com.example.aichat.core.network.WorkerStreamingClientTest
+          --tests com.example.aichat.core.network.ChatRequestQueueTest
+          assembleRelease
+          -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
+          -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
+      - name: Test and build phone APK
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
+        working-directory: android-app
+        run: >-
+          bash ./gradlew --no-daemon --max-workers=2 testDebugUnitTest assembleRelease assembleDebugAndroidTest
+          -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER}
+          -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}
+      - name: Enable emulator acceleration
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Check changed interactions on Android
+        if: "!contains(github.event.head_commit.message, '[quick-preview]')"
+        env:
+          FULL_UI_TESTS: ${{ inputs.full_ui_tests }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: false
+          working-directory: android-app
+          script: |
+            bash -c 'args=(); if [ "$FULL_UI_TESTS" != "true" ]; then args+=("-Pandroid.testInstrumentationRunnerArguments.class=com.example.aichat.feature.chat.ChatArtworkTest,com.example.aichat.feature.chat.CharacterMemoryPolishTest,com.example.aichat.feature.customization.AppearancePolishTest,com.example.aichat.feature.chat.ChatScreenContentTest,com.example.aichat.feature.ultra.UltraScreenContentTest"); fi; bash ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest "${args[@]}" -PAI_CHAT_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) -PAI_CHAT_VERSION_NAME=1.1.${GITHUB_RUN_NUMBER} -PAI_CHAT_BUILD_SHA=${GITHUB_SHA::7}'
+            mkdir -p app/build/reports/screenshots
+            adb pull /data/local/tmp/meek-chat-dark.png app/build/reports/screenshots/chat-dark.png
+            adb pull /data/local/tmp/meek-ultra-dark.png app/build/reports/screenshots/ultra-dark.png
+            adb pull /data/local/tmp/meek-body-dark.png app/build/reports/screenshots/body-dark.png
+            adb pull /data/local/tmp/meek-body-light.png app/build/reports/screenshots/body-light.png
+            adb pull /data/local/tmp/meek-appearance-dark.png app/build/reports/screenshots/appearance-dark.png
+            adb pull /data/local/tmp/meek-psychology-dark.png app/build/reports/screenshots/psychology-dark.png
+      - name: Keep test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            android-app/app/build/reports/tests/
+            android-app/app/build/reports/androidTests/
+            android-app/app/build/outputs/androidTest-results/
+            android-app/app/build/reports/screenshots/
+      - name: Keep APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: meek-apk
+          path: android-app/app/build/outputs/apk/release/app-release.apk
+      - name: Publish phone download
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp android-app/app/build/outputs/apk/release/app-release.apk Meek.apk
+          sha256sum Meek.apk > Meek.apk.sha256
+          cat > /tmp/preview-notes.md <<'NOTES'
+          Open Meek.apk on your Android phone and choose Update.
+          This non-debuggable preview build uses the repository's existing shared debug certificate.
+          If Android reports an incompatible signature, keep your installed app; do not uninstall it and lose local data.
+          Cloudflare backend changes require a separate deployment; the build logs show whether deployment credentials were available.
+          NOTES
+          printf '\nVersion: 1.1.%s · source commit: %s\n' "$GITHUB_RUN_NUMBER" "$GITHUB_SHA" >> /tmp/preview-notes.md
+          if gh release view mobile-preview > /dev/null 2>&1; then
+            gh release upload mobile-preview Meek.apk Meek.apk.sha256 --clobber
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/mobile-preview" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit mobile-preview --notes-file /tmp/preview-notes.md
+          else
+            gh release create mobile-preview Meek.apk Meek.apk.sha256 --target "$GITHUB_SHA" --title 'Meek phone preview' --prerelease --notes-file /tmp/preview-notes.md
+          fi
+  deploy-backend:
+    needs: [backend-tests, android]
+    if: always() && github.event_name != 'pull_request' && needs.backend-tests.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Identify requested live image comparison
+        id: comparison
+        run: |
+          if git diff --quiet HEAD^ HEAD -- backend/evaluation/run.json; then
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deploy existing Worker if credentials are configured
+        working-directory: backend
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'Backend not deployed: add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in repository Actions secrets.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo '::error::Account ID is missing. Add CLOUDFLARE_ACCOUNT_ID or CLOUDFARE_ACCOUNT_ID as a repository secret.'
+            exit 1
+          fi
+          npm ci
+          npx wrangler deploy
+          echo 'Backend deployed successfully.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove completed comparison credential
+        if: steps.comparison.outputs.run == 'false'
+        working-directory: backend
+        run: node scripts/cleanup-image-evaluation.mjs
+      - name: Compare requested OpenRouter images
+        if: steps.comparison.outputs.run == 'true'
+        working-directory: backend
+        run: node scripts/run-image-evaluation.mjs
+      - name: Keep actual model outputs and costs
+        if: always() && steps.comparison.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrouter-image-evaluation
+          path: backend/evaluation/results/

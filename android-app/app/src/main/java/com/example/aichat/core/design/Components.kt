@@ -31,6 +31,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -84,7 +90,7 @@ private fun elevatedSurfaceColor(): Color {
 }
 
 @Composable
-private fun controlSurfaceColor(selected: Boolean): Color {
+internal fun controlSurfaceColor(selected: Boolean): Color {
     val scheme = MaterialTheme.colorScheme
     return if (selected) {
         scheme.onSurface.copy(alpha = 0.09f).compositeOver(scheme.surface)
@@ -298,9 +304,20 @@ fun AppTextField(
 ) {
     val containerColor = controlSurfaceColor(selected = false)
     val alignTextToTop = !singleLine && minLines > 1
+    // Keep selection and IME composing text together. Feed keyboard edits back
+    // immediately rather than waiting for a ViewModel/Flow recomposition.
+    var editor by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(value)) }
+    var lastExternalValue by remember { mutableStateOf(value) }
+    if (value != lastExternalValue) {
+        lastExternalValue = value
+        if (value != editor.text) editor = TextFieldValue(value, androidx.compose.ui.text.TextRange(value.length))
+    }
     BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = editor,
+        onValueChange = { next ->
+            editor = next
+            onValueChange(next.text)
+        },
         modifier = modifier,
         enabled = enabled,
         keyboardOptions = keyboardOptions,
@@ -360,7 +377,7 @@ fun AppTextField(
                         .align(if (alignTextToTop) Alignment.Top else Alignment.CenterVertically),
                     contentAlignment = if (alignTextToTop) Alignment.TopStart else Alignment.CenterStart
                 ) {
-                    if (value.isEmpty()) {
+                    if (editor.text.isEmpty()) {
                         Text(
                             text = placeholder,
                             style = MaterialTheme.typography.bodyLarge.copy(
@@ -387,27 +404,12 @@ fun IconCircleButton(
     onClick: () -> Unit,
     icon: @Composable () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .size(containerSize)
-            .appOutlineSurface(
-                shape = CircleShape,
-                enabled = enabled,
-                selected = selected
-            )
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        CompositionLocalProvider(
-            LocalContentColor provides if (selected) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        ) {
-            icon()
-        }
-    }
+    androidx.compose.material3.IconButton(
+        onClick = onClick, enabled = enabled, modifier = modifier.size(containerSize),
+        colors = androidx.compose.material3.IconButtonDefaults.iconButtonColors(
+            contentColor = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    ) { icon() }
 }
 
 @Composable
@@ -492,73 +494,28 @@ fun CharacterPortrait(
     shape: Shape = RoundedCornerShape(DesignMetrics.portraitCorner),
     alignment: Alignment = Alignment.Center
 ) {
-    val palette = avatarPalette(avatarUrl ?: name)
-    when {
-        avatarUrl.isNullOrBlank().not() -> {
-            AsyncImage(
-                model = avatarUrl,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                alignment = alignment,
-                modifier = modifier
-                    .clip(shape)
-                    .background(controlSurfaceColor(selected = false))
-            )
-        }
+    val placeholder = androidx.compose.ui.res.painterResource(characterPlaceholder(name))
+    AsyncImage(
+        model = avatarUrl?.takeIf { it.isNotBlank() },
+        contentDescription = name, contentScale = ContentScale.Crop, alignment = alignment,
+        placeholder = placeholder, fallback = placeholder, error = placeholder,
+        modifier = modifier.clip(shape)
+    )
+}
 
-        else -> {
-            Box(
-                modifier = modifier
-                    .clip(shape)
-                    .background(brush = Brush.linearGradient(palette)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = name.take(2).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
+private fun characterPlaceholder(name: String): Int {
+    val variants = intArrayOf(
+        com.example.aichat.R.drawable.character_silhouette_slate,
+        com.example.aichat.R.drawable.character_silhouette_plum,
+        com.example.aichat.R.drawable.character_silhouette_teal,
+        com.example.aichat.R.drawable.character_silhouette_clay
+    )
+    return variants[Math.floorMod(name.hashCode(), variants.size)]
 }
 
 @Composable
-fun CircleAvatar(
-    name: String,
-    avatarUrl: String?,
-    modifier: Modifier = Modifier
-) {
-    val palette = avatarPalette(avatarUrl ?: name)
-    when {
-        avatarUrl.isNullOrBlank().not() -> {
-            AsyncImage(
-                model = avatarUrl,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                modifier = modifier
-                    .clip(CircleShape)
-                    .background(controlSurfaceColor(selected = false))
-            )
-        }
-
-        else -> {
-            Box(
-                modifier = modifier
-                    .clip(CircleShape)
-                    .background(brush = Brush.linearGradient(palette)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = name.take(2).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
+fun CircleAvatar(name: String, avatarUrl: String?, modifier: Modifier = Modifier) {
+    CharacterPortrait(name, avatarUrl, modifier, shape = CircleShape)
 }
 
 @Composable

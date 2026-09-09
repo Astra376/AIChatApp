@@ -1,0 +1,70 @@
+import { SCENE_STYLE } from "./scenes";
+import { upperBodyPrompt, expressionPrompt } from "./characterArtPrompts";
+import { IMAGE_MODELS, type ImageInput } from "../../providers/openrouterImages";
+export interface EvaluationCase { id: string; label: string; image: ImageInput; reference?: string; }
+const photo = "Editorial photograph of a fictional adult woman, age 29, head and upper torso, three-quarter view. Warm olive skin with natural pores and a small mole below her left eye, hazel-green eyes, slightly asymmetric smile, shoulder-length wavy dark brown hair with one copper streak on her right. Burgundy cable-knit cardigan, small silver crescent pendant. Hands outside the frame. Quiet slate-grey studio background, soft window light from the left, 85mm portrait lens. Natural unretouched skin, believable hair and fabric, restrained color, a calm neutral expression. No text, no watermark, no beauty-filter skin.";
+const anime = "Professional hand-drawn anime character key visual of a fictional adult man, age 28, head and upper torso, three-quarter view. Short navy-blue hair with one white forelock over his left brow, amber eyes, small notch in the right eyebrow, small silver ear cuff on the left. Ochre bomber jacket over a black turtleneck, an enamel cloud pin on the left lapel. Hands outside the frame. Quiet slate-grey background, soft lighting from the left. Confident varied ink line weights, controlled cel shading, expressive mature facial design, crisp but natural edges, restrained detail. Calm neutral expression. No text, no watermark, no plastic 3D rendering.";
+const cafe = "Atmospheric empty neighborhood cafe at dusk, warm amber pendant lights, worn wooden tables, rain on the large windows, a quiet street outside. Coherent architecture and perspective, believable furniture. Vertical scene behind a phone chat, large calm areas and restrained light, no people, no lettering, no watermark. Photographic lighting. This image will be heavily blurred in the app.";
+const forest = "An illustrated moonlit forest clearing, graceful birch trunks, mossy stones, soft distant lantern glow, a narrow footpath. Coherent depth and calm negative space, controlled painted shapes, deep indigo and muted teal palette. Vertical background behind a phone chat, no characters, no text, no watermark. This image will be heavily blurred in the app.";
+const expression = (emotion: string) => `Edit this exact reference image. Change only the expression to ${emotion}. Preserve the identical person, face geometry, nose, jaw, eyes, hair shape/color/forelock, identifying marks, age, skin tone, clothing, pendant/pin/ear cuff. Keep the same three-quarter view, crop, pose, lighting, background and photographic or illustrated style. Subtle natural expression, no caricature, no text or new objects.`;
+export const legacyImageEvaluationCases: EvaluationCase[] = [
+  { id: "photo_flux", label: "Photo · FLUX Pro", image: { model: IMAGE_MODELS.realistic, prompt: photo } },
+  { id: "photo_nano", label: "Photo · Nano Banana 2", image: { model: IMAGE_MODELS.nano, prompt: photo } },
+  { id: "anime_seedream", label: "Anime · Seedream Lite", image: { model: "bytedance-seed/seedream-5-0-lite", prompt: anime } },
+  { id: "anime_nano", label: "Anime · Nano Banana 2", image: { model: IMAGE_MODELS.nano, prompt: anime } },
+  { id: "photo_preview_512", label: "FLUX · 512px capability", image: { model: IMAGE_MODELS.realistic, prompt: photo, size: "512x512", preview: true } },
+  { id: "anime_preview_512", label: "Seedream · 512px capability", image: { model: "bytedance-seed/seedream-5-0-lite", prompt: anime, size: "512x512", preview: true } },
+  { id: "anime_nano_preview", label: "Nano · 512px anime preview", image: { model: IMAGE_MODELS.nano, prompt: anime, preview: true } },
+  ...(["joyful laughter", "quiet sadness", "contained anger"] as const).flatMap((emotion, index) => [
+    { id: `photo_flux_e${index}`, label: `FLUX · ${emotion}`, reference: "photo_flux", image: { model: IMAGE_MODELS.realistic, prompt: expression(emotion) } },
+    { id: `photo_nano_e${index}`, label: `Nano · ${emotion} (FLUX reference)`, reference: "photo_flux", image: { model: IMAGE_MODELS.nano, prompt: expression(emotion) } },
+    { id: `anime_seedream_e${index}`, label: `Seedream · ${emotion}`, reference: "anime_seedream", image: { model: "bytedance-seed/seedream-5-0-lite", prompt: expression(emotion) } },
+    { id: `anime_nano_e${index}`, label: `Nano · ${emotion} (Seedream reference)`, reference: "anime_seedream", image: { model: IMAGE_MODELS.nano, prompt: expression(emotion) } }
+  ]),
+  { id: "photo_refine_flux", label: "FLUX · refine Nano reference", reference: "photo_nano", image: { model: IMAGE_MODELS.realistic, prompt: "Enhance this exact portrait at full resolution. Preserve the identical person, face, hair, clothes, pose, crop, expression, lighting and photographic style. Do not redesign anything." } },
+  { id: "anime_refine_seedream", label: "Seedream · refine Nano reference", reference: "anime_nano", image: { model: "bytedance-seed/seedream-5-0-lite", prompt: "Enhance this exact portrait at full resolution. Preserve the identical person, face, hair, clothes, pose, crop, expression, lighting and anime art style. Do not redesign anything." } },
+  { id: "anime_pro_e1", label: "Nano Pro · quiet sadness (Seedream reference)", reference: "anime_seedream", image: { model: IMAGE_MODELS.premium, prompt: expression("quiet sadness") } },
+  { id: "anime_pro_e2", label: "Nano Pro · contained anger (Seedream reference)", reference: "anime_seedream", image: { model: IMAGE_MODELS.premium, prompt: expression("contained anger") } },
+  { id: "photo_refine_pro", label: "Nano Pro · upgrade 512px FLUX preview", reference: "photo_preview_512", image: { model: IMAGE_MODELS.premium, prompt: "Enhance this exact portrait at full resolution. Preserve the identical person, face, hair, clothes, pose, crop, expression, lighting and photographic style. Do not redesign anything." } },
+  { id: "cafe_klein", label: "Cafe · Klein 9B", image: { model: IMAGE_MODELS.background, prompt: cafe, aspectRatio: "9:16" } },
+  { id: "forest_klein", label: "Forest · Klein 9B", image: { model: IMAGE_MODELS.background, prompt: forest, aspectRatio: "9:16" } },
+  { id: "cafe_nano", label: "Cafe · Nano Banana 2", image: { model: IMAGE_MODELS.nano, prompt: cafe, aspectRatio: "9:16" } },
+  { id: "forest_nano", label: "Forest · Nano Banana 2", image: { model: IMAGE_MODELS.nano, prompt: forest, aspectRatio: "9:16" } }
+];
+
+// A separate immutable run keeps previous paid comparisons cached.
+export const transparentImageEvaluationCases: EvaluationCase[] = [
+  { id: "profile_photo", label: "FLUX realistic profile crop", image: { model: IMAGE_MODELS.realistic, prompt: photo + " IMPORTANT: square profile picture, close-up head and shoulders only, face large, entire hair visible, opaque studio background. No waist-up framing." } },
+  { id: "profile_anime", label: "Nano Banana 2 stylized profile crop", image: { model: IMAGE_MODELS.nano, prompt: anime + " IMPORTANT: square profile picture, close-up head and shoulders only, face large, entire hair visible, opaque studio background. No waist-up framing." } },
+  ...(["photo", "anime"] as const).flatMap(style => (["river", "gpt"] as const).flatMap(provider => {
+    const id = `${style}_${provider}`;
+    const model = provider === "river" ? IMAGE_MODELS.riverflow : IMAGE_MODELS.transparent;
+    const settings: ImageInput = { model, prompt: upperBodyPrompt, background: "transparent", aspectRatio: "2:3", ...(provider === "gpt" ? { quality: "high" as const } : {}) };
+    return [
+      { id, label: `${style} upper body / ${provider}`, reference: `profile_${style}`, image: settings },
+      { id: `${id}_joy`, label: `${style} joy / ${provider}`, reference: id, image: { ...settings, prompt: expressionPrompt("warm joyful laughter") } },
+      { id: `${id}_sad`, label: `${style} sadness / ${provider}`, reference: id, image: { ...settings, prompt: expressionPrompt("quiet sadness") } }
+    ];
+  }))
+];
+const affordableAlphaCases: EvaluationCase[] = (["photo", "anime"] as const).flatMap(style => [
+  { key: "gpt_medium", model: IMAGE_MODELS.transparent, quality: "medium" as const },
+  { key: "mini_high", model: IMAGE_MODELS.transparentMini, quality: "high" as const },
+  { key: "mini_medium", model: IMAGE_MODELS.transparentMini, quality: "medium" as const }
+].flatMap(tier => {
+  const id = `${style}_${tier.key}`;
+  const settings: ImageInput = { model: tier.model, quality: tier.quality, background: "transparent", aspectRatio: "2:3", prompt: upperBodyPrompt };
+  return [
+    { id, label: `${style} neutral / ${tier.key}`, image: { ...settings, referenceImageUrl: `https://character-chat-worker.robloxproxy.workers.dev/v1/assets/portraits%2Fimage_evaluation%2Ftransparent_body_20260907_v1_profile_${style}.jpg` } },
+    { id: `${id}_sad`, label: `${style} sadness / ${tier.key}`, reference: id, image: { ...settings, prompt: expressionPrompt("quiet sadness") } }
+  ];
+}));
+const animeSceneCases: EvaluationCase[] = [
+  { id: "cafe", prompt: "An empty neighborhood cafe at dusk. Worn walnut tables, two teal chairs, amber pendant lights, rain running down a large street-facing window. Quiet composition with a clear window on the right. No signs or menus." },
+  { id: "forest", prompt: "A moonlit birch forest clearing. White trunks, mossy stones, one narrow winding footpath, deep indigo sky and a soft distant lantern glow. No buildings." },
+  { id: "room", prompt: "A quiet medieval castle bedroom at sunrise. One simple wooden bed with a dark blue blanket, a narrow arched stone window on the left, a wooden desk with a closed book, warm sunlight on grey stone walls. No modern objects." }
+].flatMap(scene => [
+  { id: `${scene.id}_klein4`, label: `${scene.id} / Klein 4B anime`, image: { model: "black-forest-labs/flux.2-klein-4b", prompt: `${SCENE_STYLE}\n${scene.prompt}`, aspectRatio: "9:16" } },
+  { id: `${scene.id}_nano`, label: `${scene.id} / previous Gemini anime`, image: { model: IMAGE_MODELS.nano, prompt: `${SCENE_STYLE}\n${scene.prompt}`, aspectRatio: "9:16" } }
+]);
+export const imageEvaluationCasesForRun = (run: string) => run.startsWith("anime_scenes_") ? animeSceneCases : run.startsWith("affordable_alpha_") ? affordableAlphaCases : run.startsWith("transparent_body_") ? transparentImageEvaluationCases : legacyImageEvaluationCases;

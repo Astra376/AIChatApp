@@ -16,6 +16,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 sealed interface ChatStreamEvent {
+    data class Status(val runId: String, val status: String, val model: String) : ChatStreamEvent
+
     data class AcceptedSend(
         val runId: String,
         val conversationVersion: Long,
@@ -88,6 +90,11 @@ class WorkerStreamingClient private constructor(
         baseUrl: HttpUrl
     ) : this(okHttpClient, json, baseUrl.toString())
 
+    private val streamingHttpClient = okHttpClient.newBuilder()
+        .readTimeout(55, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(125, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
     private val jsonMediaType = "application/json".toMediaType()
     private val baseUrl = if (configuredBaseUrl.endsWith("/")) {
         configuredBaseUrl
@@ -124,7 +131,11 @@ class WorkerStreamingClient private constructor(
     }
 
     private fun stream(request: Request, expectedStream: ExpectedStream): Flow<ChatStreamEvent> = callbackFlow {
-        val call = okHttpClient.newCall(request)
+        val call = streamingHttpClient.newCall(request.newBuilder()
+            .header("Accept", "text/event-stream")
+            .header("X-Chat-Status", "1")
+            .header("Cache-Control", "no-cache")
+            .build())
         val readerJob = launch(Dispatchers.IO) {
             val response = try {
                 call.execute()
@@ -170,6 +181,8 @@ class WorkerStreamingClient private constructor(
                         )
                         terminalReceived = event.isTerminal
                         send(event)
+                        // Terminal events finish the operation even if the server keeps its socket open.
+                        if (terminalReceived) break
                     }
                     check(terminalReceived) {
                         "The chat stream ended before a terminal event was received."
@@ -214,6 +227,12 @@ class WorkerStreamingClient private constructor(
                 check(expectedStream == ExpectedStream.REGENERATE) { "Unexpected regeneration acceptance event." }
                 check(acceptedRunId == null) { "The chat stream was accepted more than once." }
                 event.runId
+            }
+
+            is ChatStreamEvent.Status -> {
+                checkNotNull(acceptedRunId) { "The chat stream sent status before it was accepted." }
+                check(event.runId == acceptedRunId) { "The chat stream changed run identifiers." }
+                acceptedRunId
             }
 
             is ChatStreamEvent.Delta -> {
@@ -277,6 +296,11 @@ class WorkerStreamingClient private constructor(
             runId = requireNotNull(runId),
             conversationVersion = requireNotNull(conversationVersion),
             assistantMessageId = requireNotNull(assistantMessageId)
+        )
+
+        "status" -> ChatStreamEvent.Status(
+            runId = requireNotNull(runId), status = if (status == "Thinking") "Thinking" else "Replying",
+            model = if (model == "Meek Ultra") "Meek Ultra" else "Meek Standard"
         )
 
         "delta" -> ChatStreamEvent.Delta(

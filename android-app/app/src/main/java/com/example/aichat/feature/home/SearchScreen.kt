@@ -1,6 +1,15 @@
 package com.example.aichat.feature.home
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.CancellationException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,11 +25,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -40,8 +48,8 @@ import com.example.aichat.core.design.SecondaryButton
 import com.example.aichat.core.model.CharacterSummary
 import com.example.aichat.core.ui.CharacterSummaryCardPlaceholder
 import com.example.aichat.core.ui.CharacterSummaryCard
+import com.example.aichat.core.ui.rememberCharacterChatLauncher
 import com.example.aichat.core.ui.ScreenBackgroundBox
-import com.example.aichat.core.network.userFacingMessage
 import com.example.aichat.core.ui.screenContentPadding
 import com.example.aichat.feature.chatlist.ConversationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -58,6 +66,7 @@ import kotlinx.coroutines.launch
 
 data class SearchUiState(
     val query: String = "",
+    val trendingSearches: List<String> = emptyList(),
     val results: List<CharacterSummary> = emptyList(),
     val nextCursor: String? = null,
     val isLoading: Boolean = false,
@@ -79,6 +88,12 @@ class SearchViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            runCatching { homeRepository.trendingSearches() }
+                .onSuccess { queries ->
+                    _uiState.value = _uiState.value.copy(trendingSearches = queries.distinct().take(10))
+                }
+        }
+        viewModelScope.launch {
             queryFlow.debounce(220).collectLatest { query ->
                 if (query.isBlank()) {
                     _uiState.value = _uiState.value.copy(results = emptyList(), nextCursor = null, isLoading = false)
@@ -95,9 +110,8 @@ class SearchViewModel @Inject constructor(
     }
 
     fun loadMore() {
-        viewModelScope.launch {
-            search(reset = false)
-        }
+        if (_uiState.value.isLoading || _uiState.value.nextCursor == null) return
+        viewModelScope.launch { search(reset = false) }
     }
 
     suspend fun ensureConversation(characterId: String): Result<String> {
@@ -114,12 +128,15 @@ class SearchViewModel @Inject constructor(
                 cursor = if (reset) null else state.nextCursor
             )
         }.onSuccess { page ->
+            if (_uiState.value.query != state.query) return@onSuccess
             _uiState.value = _uiState.value.copy(
-                results = if (reset) page.items else state.results + page.items,
+                results = (if (reset) page.items else state.results + page.items).distinctBy { it.id },
                 nextCursor = page.nextCursor,
                 isLoading = false
             )
-        }.onFailure {
+        }.onFailure { error ->
+            if (error is CancellationException) throw error
+            if (_uiState.value.query != state.query) return@onFailure
             _uiState.value = _uiState.value.copy(isLoading = false)
             _events.emit("Search failed.")
         }
@@ -135,7 +152,11 @@ fun SearchRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val chatLauncher = rememberCharacterChatLauncher(
+        ensureConversation = viewModel::ensureConversation,
+        onOpenConversation = onOpenConversation,
+        snackbarHostState = snackbarHostState
+    )
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -180,6 +201,50 @@ fun SearchRoute(
                     )
                 }
             }
+            if (state.query.isBlank() && state.trendingSearches.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("Trending searches", style = MaterialTheme.typography.titleLarge)
+                }
+                items(state.trendingSearches.size, span = { GridItemSpan(maxLineSpan) }) { index ->
+                    val query = state.trendingSearches[index]
+                    val rankColor = when (index) {
+                        0 -> Color(0xFFF16B6B)
+                        1 -> Color(0xFFF3AA55)
+                        2 -> Color(0xFF70CB92)
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { viewModel.onQueryChange(query) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = (index + 1).toString(),
+                            modifier = Modifier.width(24.dp),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = rankColor
+                        )
+                        Text(
+                            text = query,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = rankColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Icon(
+                            imageVector = com.github.yohannestz.iconsax_compose.iconsax.Iconsax.Linear.TrendUp,
+                            contentDescription = null,
+                            tint = rankColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
             if (state.query.isNotBlank() && !state.isLoading && state.results.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
@@ -197,15 +262,11 @@ fun SearchRoute(
             items(state.results, key = { it.id }) { character ->
                 CharacterSummaryCard(
                     character = character,
+                    isOpening = chatLauncher.openingCharacterId == character.id,
+                    enabled = chatLauncher.openingCharacterId == null,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    scope.launch {
-                        viewModel.ensureConversation(character.id)
-                            .onSuccess(onOpenConversation)
-                            .onFailure {
-                                snackbarHostState.showSnackbar(it.userFacingMessage("Couldn't open chat."))
-                            }
-                    }
+                    chatLauncher.open(character.id)
                 }
             }
             if (state.nextCursor != null) {

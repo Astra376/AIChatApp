@@ -231,6 +231,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND sendState = 'SENT' ORDER BY position ASC")
     suspend fun getCommittedMessages(conversationId: String): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND sendState = 'SENT' ORDER BY position DESC LIMIT :limit")
+    suspend fun getRecentCommittedMessages(conversationId: String, limit: Int): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND (position > :position OR sendState != 'SENT')")
+    suspend fun getMessagesRemovedByRewind(conversationId: String, position: Int): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun getById(messageId: String): MessageEntity?
 
@@ -295,6 +301,23 @@ interface AssistantRegenerationDao {
 
     @Query("SELECT * FROM assistant_regenerations WHERE messageId = :messageId ORDER BY createdAt ASC")
     suspend fun getByMessage(messageId: String): List<AssistantRegenerationEntity>
+
+    @Query("SELECT * FROM assistant_regenerations WHERE messageId IN (:messageIds) ORDER BY createdAt ASC")
+    suspend fun getByMessages(messageIds: List<String>): List<AssistantRegenerationEntity>
+
+    @Query("SELECT r.* FROM assistant_regenerations r INNER JOIN messages m ON m.id=r.messageId WHERE m.conversationId=:conversationId AND (m.position>:position OR m.sendState!='SENT')")
+    suspend fun getRemovedByRewind(conversationId: String, position: Int): List<AssistantRegenerationEntity>
+
+    @Query("""
+        SELECT * FROM assistant_regenerations WHERE messageId IN (
+            SELECT id FROM messages WHERE conversationId = :conversationId
+            ORDER BY CASE WHEN sendState != 'SENT' THEN 0 ELSE 1 END ASC,
+                CASE WHEN sendState != 'SENT' THEN createdAt END DESC,
+                CASE WHEN sendState != 'SENT' THEN updatedAt END DESC,
+                CASE WHEN sendState = 'SENT' THEN position END DESC, id DESC LIMIT :limit
+        ) ORDER BY createdAt ASC
+    """)
+    fun observeNewestRegenerations(conversationId: String, limit: Int): Flow<List<AssistantRegenerationEntity>>
 
     @Query(
         """

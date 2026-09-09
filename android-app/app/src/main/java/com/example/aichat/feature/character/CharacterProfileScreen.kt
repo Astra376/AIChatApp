@@ -1,5 +1,7 @@
 package com.example.aichat.feature.character
 
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
+
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.clickable
@@ -17,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
@@ -152,7 +153,8 @@ fun CharacterProfileRoute(
     onOpenCreator: (String) -> Unit,
     onShare: ((CharacterSummary) -> Unit)? = null,
     onError: ((String) -> Unit)? = null,
-    viewModel: CharacterProfileViewModel = hiltViewModel()
+    viewModel: CharacterProfileViewModel = hiltViewModel(),
+    onEditCharacter: (String) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -177,7 +179,8 @@ fun CharacterProfileRoute(
             onChat = { viewModel.openChat(ownerUserId, onOpenConversation) },
             onOpenCreator = onOpenCreator,
             onToggleLike = viewModel::toggleLike,
-            onRetry = viewModel::refresh
+            onRetry = viewModel::refresh,
+            onEdit = state.character?.takeIf { it.ownerUserId == ownerUserId }?.let { character -> { onEditCharacter(character.id) } }
         )
     }
 }
@@ -190,7 +193,8 @@ internal fun CharacterProfileContent(
     onChat: (String) -> Unit,
     onOpenCreator: (String) -> Unit,
     onToggleLike: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onEdit: (() -> Unit)? = null
 ) {
     val character = state.character
     Column(
@@ -211,6 +215,7 @@ internal fun CharacterProfileContent(
         ) {
             AppBackButton(onClick = onBack)
             Spacer(modifier = Modifier.weight(1f))
+            if (onEdit != null) androidx.compose.material3.TextButton(onClick = onEdit) { Text("Edit") }
             IconButton(
                 enabled = character != null,
                 onClick = { character?.let(onShare) }

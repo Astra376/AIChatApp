@@ -11,6 +11,7 @@ import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Dispatcher
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 
@@ -31,12 +32,13 @@ object NetworkModule {
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(sessionRefreshingInterceptor)
             .addInterceptor(
                 HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
+                    level = if (com.example.aichat.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
                 }
             )
             .build()
@@ -70,10 +72,20 @@ object NetworkModule {
     fun provideHomeApi(retrofit: Retrofit): HomeApi = retrofit.create(HomeApi::class.java)
 
     @Provides
-    fun provideConversationApi(retrofit: Retrofit): ConversationApi = retrofit.create(ConversationApi::class.java)
+    fun provideConversationApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ConversationApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder().dispatcher(Dispatcher()).build())
+        .build().create(ConversationApi::class.java)
 
     @Provides
-    fun provideChatApi(retrofit: Retrofit): ChatApi = retrofit.create(ChatApi::class.java)
+    fun provideChatApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ChatApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder()
+            // Slow image/voice requests must not occupy the queue used by
+            // Stop, Edit and Rewind. Connection pooling and auth are still shared.
+            .dispatcher(Dispatcher())
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build())
+        .build().create(ChatApi::class.java)
 
     @Provides
     @Singleton
@@ -83,5 +95,10 @@ object NetworkModule {
     ): ChatStreamingClient = WorkerStreamingClient(okHttpClient, json)
 
     @Provides
-    fun provideImageApi(retrofit: Retrofit): ImageApi = retrofit.create(ImageApi::class.java)
+    fun provideImageApi(retrofit: Retrofit, okHttpClient: OkHttpClient): ImageApi = retrofit.newBuilder()
+        .client(okHttpClient.newBuilder()
+            .readTimeout(170, TimeUnit.SECONDS)
+            .callTimeout(175, TimeUnit.SECONDS)
+            .build())
+        .build().create(ImageApi::class.java)
 }

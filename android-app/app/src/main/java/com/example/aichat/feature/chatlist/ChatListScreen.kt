@@ -13,8 +13,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.Composable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,7 +37,6 @@ import com.example.aichat.core.design.CharacterPortrait
 import com.example.aichat.core.model.ConversationSummary
 import com.example.aichat.core.ui.AppChrome
 import com.example.aichat.core.ui.ChatListRowPlaceholder
-import com.example.aichat.core.ui.MainPageHeader
 import com.example.aichat.core.ui.ScreenBackgroundBox
 import com.example.aichat.core.ui.screenContentPadding
 import com.example.aichat.core.util.formatRelativeTime
@@ -92,6 +93,7 @@ fun ChatListRoute(
     onOpenSearch: () -> Unit = {},
     onOpenActivity: () -> Unit = {},
     onOpenConversation: (String) -> Unit,
+    onOpenGroups: () -> Unit = {},
     viewModel: ChatListViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -103,6 +105,9 @@ fun ChatListRoute(
         contentPadding = screenContentPadding(paddingValues)
     ) {
 
+        item(key = "groups") {
+            androidx.compose.material3.TextButton(onClick = onOpenGroups, modifier = Modifier.fillMaxWidth()) { Text("Group chats") }
+        }
         if (state.isLoading && conversations.isEmpty()) {
             items(8) {
                 ChatListRowPlaceholder()
@@ -121,15 +126,12 @@ fun ChatListRoute(
             }
         }
         items(conversations, key = { it.id }) { conversation ->
-            val interactionSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null
-                    ) { onOpenConversation(conversation.id) },
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenConversation(conversation.id) }
+                    .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

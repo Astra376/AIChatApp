@@ -1,3 +1,4 @@
+import { AppError } from "../../lib/errors";
 import type { Env } from "../../env";
 import { all, first, run } from "../client";
 
@@ -175,6 +176,21 @@ export async function listMessages(env: Env, conversationId: string): Promise<Me
   );
 }
 
+// The model needs visible versions, not every discarded regeneration. Bound
+// the database read as well as the prompt; durable history lives in memory.
+export async function listContextMessages(env: Env, conversationId: string): Promise<MessageRecord[]> {
+  const messages = await all<MessageRecord>(env.DB.prepare(`
+    SELECT m.id, m.conversation_id, m.position, m.role,
+      COALESCE(r.content, m.content) AS content, m.edited, m.created_at, m.updated_at,
+      m.selected_regeneration_id
+    FROM messages m
+    LEFT JOIN assistant_regenerations r ON r.id = m.selected_regeneration_id AND r.message_id = m.id
+    WHERE m.conversation_id = ?
+    ORDER BY m.position DESC LIMIT 256
+  `).bind(conversationId));
+  return messages.reverse();
+}
+
 export async function listRegenerationsForConversation(
   env: Env,
   conversationId: string
@@ -198,14 +214,16 @@ export async function getMessageById(env: Env, messageId: string): Promise<Messa
   );
 }
 
-export async function insertMessage(env: Env, input: MessageRecord): Promise<void> {
-  await run(
+export async function insertMessage(env: Env, input: MessageRecord, runId?: string): Promise<void> {
+  const result = await run(
     env.DB.prepare(
       `
       INSERT INTO messages (
         id, conversation_id, position, role, content, edited, created_at, updated_at, selected_regeneration_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ${runId ? `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM conversations WHERE id = ? AND active_run_id = ? AND active_run_expires_at > ?
+      )` : "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"}
       `
     ).bind(
       input.id,
@@ -216,9 +234,11 @@ export async function insertMessage(env: Env, input: MessageRecord): Promise<voi
       input.edited,
       input.created_at,
       input.updated_at,
-      input.selected_regeneration_id
+      input.selected_regeneration_id,
+      ...(runId ? [input.conversation_id, runId, Date.now()] : [])
     )
   );
+  if (runId && Number(result.meta.changes) === 0) throw new AppError(409, "RUN_CANCELLED", "The reply was stopped.");
 }
 
 export async function updateMessageContent(env: Env, input: {
@@ -243,15 +263,17 @@ export async function updateMessageSelection(env: Env, input: {
   selectedRegenerationId: string | null;
   updatedAt: number;
   edited?: boolean;
-}): Promise<void> {
+}, runId?: string): Promise<void> {
   await run(
     env.DB.prepare(
       `
       UPDATE messages
       SET selected_regeneration_id = ?, updated_at = ?, edited = COALESCE(?, edited)
       WHERE id = ?
+      ${runId ? `AND EXISTS (SELECT 1 FROM conversations WHERE conversations.id = messages.conversation_id
+        AND active_run_id = ? AND active_run_expires_at > ?)` : ""}
       `
-    ).bind(input.selectedRegenerationId, input.updatedAt, input.edited == null ? null : input.edited ? 1 : 0, input.messageId)
+    ).bind(input.selectedRegenerationId, input.updatedAt, input.edited == null ? null : input.edited ? 1 : 0, input.messageId, ...(runId ? [runId, Date.now()] : []))
   );
 }
 
@@ -263,15 +285,19 @@ export async function deleteMessagesAfter(env: Env, conversationId: string, posi
   );
 }
 
-export async function insertRegeneration(env: Env, input: AssistantRegenerationRecord): Promise<void> {
-  await run(
+export async function insertRegeneration(env: Env, input: AssistantRegenerationRecord, runId?: string): Promise<void> {
+  const result = await run(
     env.DB.prepare(
       `
       INSERT INTO assistant_regenerations (id, message_id, content, created_at)
-      VALUES (?, ?, ?, ?)
+      ${runId ? `SELECT ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM conversations JOIN messages ON messages.conversation_id = conversations.id
+        WHERE messages.id = ? AND active_run_id = ? AND active_run_expires_at > ?
+      )` : "VALUES (?, ?, ?, ?)"}
       `
-    ).bind(input.id, input.message_id, input.content, input.created_at)
+    ).bind(input.id, input.message_id, input.content, input.created_at, ...(runId ? [input.message_id, runId, Date.now()] : []))
   );
+  if (runId && Number(result.meta.changes) === 0) throw new AppError(409, "RUN_CANCELLED", "The reply was stopped.");
 }
 
 export async function updateRegenerationContent(env: Env, regenerationId: string, content: string): Promise<void> {
@@ -332,4 +358,54 @@ export async function releaseConversationRun(env: Env, conversationId: string, r
       `
     ).bind(conversationId, runId)
   );
+}
+
+export interface StoppedReplySnapshot {
+  messageId: string;
+  text: string;
+  regenerate: boolean;
+}
+
+// A stop request can reach a different Worker before socket cancellation reaches
+// the streaming Worker. Save the visible text and release its lease atomically.
+export async function finishStoppedConversationRun(
+  env: Env, conversationId: string, runId: string, partial?: StoppedReplySnapshot
+): Promise<void> {
+  if (!partial?.text.trim()) return releaseConversationRun(env, conversationId, runId);
+  const now = Date.now();
+  const statements: D1PreparedStatement[] = [];
+  if (partial.regenerate) {
+    const regenerationId = `regen_${runId}`;
+    statements.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO assistant_regenerations (id, message_id, content, created_at)
+      SELECT ?, m.id, ?, ? FROM messages m JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.id = ? AND c.active_run_id = ? AND c.active_run_expires_at > ?
+        AND m.id = ? AND m.role = 'assistant'
+        AND NOT EXISTS (SELECT 1 FROM messages later WHERE later.conversation_id = c.id AND later.position > m.position)
+    `).bind(regenerationId, partial.text, now, conversationId, runId, now, partial.messageId));
+    statements.push(env.DB.prepare(`
+      UPDATE messages SET selected_regeneration_id = ?, updated_at = ?
+      WHERE id = ? AND conversation_id = ?
+        AND EXISTS (SELECT 1 FROM conversations WHERE id = ? AND active_run_id = ? AND active_run_expires_at > ?)
+        AND EXISTS (SELECT 1 FROM assistant_regenerations WHERE id = ? AND message_id = messages.id)
+    `).bind(regenerationId, now, partial.messageId, conversationId, conversationId, runId, now, regenerationId));
+  } else {
+    // IDs are derived from the accepted run; a snapshot cannot replace history.
+    if (partial.messageId !== `message_${runId}`) {
+      throw new AppError(400, "INVALID_STOPPED_REPLY", "The stopped reply does not match this run.");
+    }
+    statements.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO messages
+        (id, conversation_id, position, role, content, edited, created_at, updated_at, selected_regeneration_id)
+      SELECT ?, c.id, (SELECT COALESCE(MAX(position), -1) + 1 FROM messages WHERE conversation_id = c.id),
+        'assistant', ?, 0, ?, ?, NULL FROM conversations c
+      WHERE c.id = ? AND c.active_run_id = ? AND c.active_run_expires_at > ?
+    `).bind(partial.messageId, partial.text, now, now, conversationId, runId, now));
+  }
+  statements.push(env.DB.prepare(`
+    UPDATE conversations SET active_run_id = NULL, active_run_expires_at = NULL,
+      updated_at = ?, last_message_at = ?, version = version + 1
+    WHERE id = ? AND active_run_id = ?
+  `).bind(now, now, conversationId, runId));
+  await env.DB.batch(statements);
 }

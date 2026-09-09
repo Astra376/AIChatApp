@@ -11,3 +11,5 @@
 *.iml
 .idea
 
+
+backend/evaluation/results/

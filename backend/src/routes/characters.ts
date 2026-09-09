@@ -1,3 +1,4 @@
+import { notifyCharacterPublished } from "../services/notifications";
 import {
   createOwnedCharacter,
   getCharacter,
@@ -33,8 +34,12 @@ export const characterRoutes: RouteDefinition[] = [
         systemPrompt: requireString(body.systemPrompt, "systemPrompt", 64_000),
         definitionPrivate: body.definitionPrivate === true,
         visibility: parseCharacterVisibility(requireString(body.visibility, "visibility", 20)),
-        avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl : null
+        avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl : null,
+        voiceId: body.voiceId == null ? null : requireString(body.voiceId, "voiceId", 250),
+        psychologyDefaults: body.psychologyDefaults,
+        defaultPersona: body.defaultPersona
       });
+      if (created.visibility === "public") context.waitUntil?.(notifyCharacterPublished(context.env, created.id).catch(error => console.error("Character notification failed", error)));
       return json(created, { status: 201 });
     }
   },
@@ -90,8 +95,12 @@ export const characterRoutes: RouteDefinition[] = [
         systemPrompt: requireString(body.systemPrompt, "systemPrompt", 64_000),
         definitionPrivate: body.definitionPrivate === true,
         visibility: parseCharacterVisibility(requireString(body.visibility, "visibility", 20)),
-        avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl : null
+        avatarUrl: typeof body.avatarUrl === "string" ? body.avatarUrl : null,
+        voiceId: body.voiceId == null ? null : requireString(body.voiceId, "voiceId", 250),
+        psychologyDefaults: body.psychologyDefaults,
+        defaultPersona: body.defaultPersona
       });
+      if (updated.visibility === "public") context.waitUntil?.(notifyCharacterPublished(context.env, updated.id).catch(error => console.error("Character notification failed", error)));
       return json(updated);
     }
   },

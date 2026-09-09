@@ -1,5 +1,7 @@
 package com.example.aichat.feature.character
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import android.content.Context
 import com.example.aichat.core.db.CharacterDao
 import com.example.aichat.core.db.toEntity
@@ -117,6 +119,10 @@ class CharacterRepository @Inject constructor(
         }
         if (draft.avatarUrl.isNullOrBlank()) return Result.failure(IllegalArgumentException("Choose an image first."))
 
+        val persona = draft.psychologyDefaults.defaultPersona
+        if (persona.name.isBlank() && listOf(persona.backstory,persona.appearance,persona.pronouns).any { it.isNotBlank() }) {
+            return Result.failure(IllegalArgumentException("Add a name for the user's default role, or leave all role fields blank."))
+        }
         return runCatching {
             val appearance = draft.appearance.trim().ifBlank { "Uploaded character image." }
             val bio = draft.bio.trim().ifBlank { appearance.take(CHARACTER_BIO_LIMIT) }
@@ -134,7 +140,10 @@ class CharacterRepository @Inject constructor(
                 systemPrompt = systemPrompt,
                 definitionPrivate = draft.definitionPrivate,
                 visibility = draft.visibility.name.lowercase(),
-                avatarUrl = draft.avatarUrl
+                avatarUrl = resolvePortrait(draft.avatarUrl!!),
+                voiceId = draft.voiceId,
+                psychologyDefaults = draft.psychologyDefaults,
+                defaultPersona = draft.psychologyDefaults.defaultPersona
             )
             val remote = if (draft.id == null) {
                 characterApi.createCharacter(payload)
@@ -208,11 +217,55 @@ class CharacterRepository @Inject constructor(
     private fun characterMutex(characterId: String): Mutex =
         characterMutationMutexes.computeIfAbsent(characterId) { Mutex() }
 
-    suspend fun generatePortrait(seedSource: String): Result<String> {
-        if (seedSource.isBlank()) return Result.failure(IllegalArgumentException("Add a name or prompt first."))
-        return runCatching {
-            imageApi.generatePortrait(GeneratePortraitRequestDto(seedSource.trim())).avatarUrl
+    suspend fun loadEditingDraft(characterId: String): Result<CharacterDraft> = try {
+        val character = characterApi.getCharacter(characterId)
+        val psychology = characterApi.psychology(characterId)
+        characterDao.upsert(character.toEntity())
+        Result.success(CharacterDraft(id=character.id,name=character.name,tagline=character.tagline,greeting=character.greeting,
+            appearance=character.bio,bio=character.bio,systemPrompt=character.systemPrompt,characterDefinition=character.systemPrompt,
+            definitionPrivate=character.definitionPrivate,visibility=CharacterVisibility.valueOf(character.visibility.uppercase()),
+            avatarUrl=character.avatarUrl,psychologyDefaults=psychology))
+    } catch (error: CancellationException) { throw error } catch (error: Throwable) { Result.failure(error) }
+
+    private suspend fun resolvePortrait(uri: String): String {
+        if (uri.startsWith("https://")) return uri
+        require(uri.startsWith("content://")) { "Choose a valid portrait image." }
+        val bytes = withContext(Dispatchers.IO) {
+            val source = android.net.Uri.parse(uri)
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(source)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "This image couldn't be read." }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val bitmap = context.contentResolver.openInputStream(source)?.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                ?: error("This image couldn't be opened.")
+            try {
+                java.io.ByteArrayOutputStream().use { stream ->
+                    check(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream)) { "This image couldn't be prepared." }
+                    stream.toByteArray()
+                }
+            } finally { bitmap.recycle() }
         }
+        return imageApi.uploadPortrait(bytes.toRequestBody("image/jpeg".toMediaType())).avatarUrl
+    }
+
+    suspend fun autoCreate(idea: String): Result<com.example.aichat.core.network.AutoCreateCharacterDto> = try {
+        Result.success(characterApi.autoCreate(com.example.aichat.core.network.AutoCreateCharacterRequestDto(idea.take(4000))))
+    } catch (error: CancellationException) { throw error } catch (error: Throwable) { Result.failure(error) }
+
+    suspend fun generateEmotionPortraits(characterId: String): Result<Unit> = try {
+        characterApi.generateEmotionPortraits(characterId)
+        Result.success(Unit)
+    } catch (error: CancellationException) { throw error } catch (error: Throwable) { Result.failure(error) }
+
+    suspend fun generatePortrait(seedSource: String, preview: Boolean = false, sourceAvatarUrl: String? = null): Result<String> {
+        if (seedSource.isBlank()) return Result.failure(IllegalArgumentException("Add a name or prompt first."))
+        return try {
+            Result.success(imageApi.generatePortrait(GeneratePortraitRequestDto(seedSource.trim().take(2_000), preview, sourceAvatarUrl)).avatarUrl)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) { Result.failure(error) }
     }
 
     suspend fun generateGreeting(name: String, description: String): Result<String> {

@@ -1,6 +1,9 @@
 package com.example.aichat.core.network
 
 import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -35,6 +38,31 @@ class WorkerStreamingClientTest {
     @After
     fun tearDown() {
         server.shutdown()
+    }
+
+    @Test
+    fun reasoningStatusIsOptedInAndDoesNotInterruptDeltas() = runTest {
+        server.enqueue(sseResponse(listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID, conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            StreamEventDto(type = "status", runId = RUN_ID, status = "Thinking", model = "Meek Ultra"),
+            StreamEventDto(type = "delta", runId = RUN_ID, textDelta = "Hello"),
+            completedSendEvent()
+        )))
+        val events = client.continueAssistant(CONVERSATION_ID).toList()
+        assertThat(events.filterIsInstance<ChatStreamEvent.Status>().single().status).isEqualTo("Thinking")
+        assertThat(events.filterIsInstance<ChatStreamEvent.Delta>().single().textDelta).isEqualTo("Hello")
+        assertThat(server.takeRequest().getHeader("X-Chat-Status")).isEqualTo("1")
+    }
+
+    @Test
+    fun reasoningStatusForAnotherRunFailsValidation() = runTest {
+        server.enqueue(sseResponse(listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID, conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            StreamEventDto(type = "status", runId = "wrong-run", status = "Thinking"),
+            completedSendEvent()
+        )))
+        val error = runCatching { client.continueAssistant(CONVERSATION_ID).toList() }.exceptionOrNull()
+        assertThat(error).hasMessageThat().contains("changed run identifiers")
     }
 
     @Test
@@ -140,6 +168,43 @@ class WorkerStreamingClientTest {
         assertThat(received).hasSize(2)
         assertThat(server.takeRequest().path)
             .isEqualTo("/v1/conversations/$CONVERSATION_ID/continue/stream")
+    }
+
+    @Test
+    fun deltasAreDeliveredBeforeRemainingResponseBytesArrive() = runBlocking {
+        val initial = listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID,
+                conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            StreamEventDto(type = "delta", runId = RUN_ID, textDelta = "already visible")
+        ).joinToString("\n\n", postfix = "\n\n") {
+            "data: ${json.encodeToString(StreamEventDto.serializer(), it)}"
+        }
+        val terminal = "data: ${json.encodeToString(StreamEventDto.serializer(), completedSendEvent())}\n\n"
+        server.enqueue(MockResponse()
+            .setHeader("Content-Type", "text/event-stream")
+            .setBody(initial + terminal)
+            .throttleBody(initial.toByteArray().size.toLong(), 3, TimeUnit.SECONDS))
+
+        // The terminal bytes cannot arrive for three seconds. A buffering client times out here.
+        val received = withTimeout(2_000) {
+            client.continueAssistant(CONVERSATION_ID).take(2).toList()
+        }
+        assertThat((received.last() as ChatStreamEvent.Delta).textDelta).isEqualTo("already visible")
+        val request = server.takeRequest()
+        assertThat(request.getHeader("Accept")).isEqualTo("text/event-stream")
+    }
+
+    @Test
+    fun terminalEventCompletesWithoutWaitingForSocketEof() = runBlocking {
+        val response = sseResponse(listOf(
+            StreamEventDto(type = "accepted_continue", runId = RUN_ID,
+                conversationVersion = 1, assistantMessageId = ASSISTANT_MESSAGE_ID),
+            completedSendEvent()
+        )).setHeader("Content-Length", "1000000")
+        server.enqueue(response)
+
+        val received = withTimeout(2_000) { client.continueAssistant(CONVERSATION_ID).toList() }
+        assertThat(received.last()).isInstanceOf(ChatStreamEvent.CompletedSend::class.java)
     }
 
     private fun sseResponse(events: List<StreamEventDto>): MockResponse {

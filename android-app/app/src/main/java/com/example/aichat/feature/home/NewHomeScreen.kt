@@ -22,25 +22,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import com.example.aichat.core.ui.DelayedCircularProgressIndicator as CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,7 +45,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.example.aichat.core.auth.AuthRepository
-import com.example.aichat.core.design.AppCard
 import com.example.aichat.core.design.AppIcon
 import com.example.aichat.core.design.AppIcons
 import com.example.aichat.core.design.CharacterPortrait
@@ -62,12 +56,11 @@ import com.example.aichat.core.ui.AppChrome
 import com.example.aichat.core.ui.CharacterSummaryCardPlaceholder
 import com.example.aichat.core.ui.CharacterSummaryCard
 import com.example.aichat.core.ui.CircleAvatarPlaceholder
+import com.example.aichat.core.ui.rememberCharacterChatLauncher
 import com.example.aichat.core.ui.ScreenBackgroundBox
-import com.example.aichat.core.network.userFacingMessage
+import com.example.aichat.core.ui.ShimmerTextBlock
 import com.example.aichat.core.ui.ShimmerBox
-import com.example.aichat.core.ui.ShimmerTextLine
 import com.example.aichat.core.ui.screenContentPadding
-import com.example.aichat.core.util.formatRelativeTimeWords
 import com.example.aichat.feature.chatlist.ConversationRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -80,8 +73,10 @@ import javax.inject.Inject
 
 data class NewHomeUiState(
     val recentChats: List<ConversationSummary> = emptyList(),
+    val unreadChats: List<ConversationSummary> = emptyList(),
     val totalUnreadCount: Int = 0,
     val topPicks: List<CharacterSummary> = emptyList(),
+    val featuredRecommended: List<CharacterSummary> = emptyList(),
     val recommendedFeed: List<CharacterSummary> = emptyList(),
     val recommendedCursor: String? = null,
     val isFeedLoading: Boolean = true,
@@ -101,6 +96,20 @@ internal fun mostRecentChatPerCharacter(
         )
     }
 
+internal fun mostRecentUnreadChatPerCharacter(
+    chats: List<ConversationSummary>
+): List<ConversationSummary> = chats
+    .filter { it.unreadCount > 0 }
+    .groupBy(ConversationSummary::characterId)
+    .values
+    .mapNotNull { unreadSessions ->
+        mostRecentChatPerCharacter(unreadSessions).singleOrNull()?.copy(
+            unreadCount = unreadSessions.sumOf { it.unreadCount },
+            hasUnreadBadge = true
+        )
+    }
+    .sortedWith(compareByDescending<ConversationSummary> { it.unreadCount }.thenByDescending { it.updatedAt })
+
 @HiltViewModel
 class NewHomeViewModel @Inject constructor(
     private val authRepository: AuthRepository,
@@ -118,15 +127,11 @@ class NewHomeViewModel @Inject constructor(
         viewModelScope.launch {
             conversationRepository.observeConversations(userId).collect { chats ->
                 val latestChats = mostRecentChatPerCharacter(chats)
-                val unreadCount = latestChats.sumOf { it.unreadCount }
-                val sortedChats = latestChats.sortedWith(
-                    compareByDescending<ConversationSummary> { it.unreadCount > 0 }
-                        .thenByDescending { it.hasUnreadBadge }
-                        .thenByDescending { it.updatedAt }
-                )
+                val unreadChats = mostRecentUnreadChatPerCharacter(chats)
                 _uiState.value = _uiState.value.copy(
-                    recentChats = sortedChats,
-                    totalUnreadCount = unreadCount
+                    recentChats = latestChats.sortedByDescending { it.updatedAt },
+                    unreadChats = unreadChats,
+                    totalUnreadCount = unreadChats.sumOf { it.unreadCount }
                 )
             }
         }
@@ -138,10 +143,12 @@ class NewHomeViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isFeedLoading = true, errorMessage = null)
             runCatching { homeRepository.loadFeed(cursor = null) }
                 .onSuccess { page ->
-                    val picks = page.items.take(4)
-                    val recs = page.items.drop(4)
+                    val featured = page.items.take(4)
+                    val picks = page.items.drop(4).take(4)
+                    val recs = page.items.drop(8)
                     _uiState.value = _uiState.value.copy(
                         topPicks = picks,
+                        featuredRecommended = featured,
                         recommendedFeed = recs,
                         recommendedCursor = page.nextCursor,
                         isFeedLoading = false
@@ -161,15 +168,21 @@ class NewHomeViewModel @Inject constructor(
 
     fun loadMore() {
         val cursor = _uiState.value.recommendedCursor ?: return
+        if (_uiState.value.isFeedLoading) return
+        _uiState.value = _uiState.value.copy(isFeedLoading = true)
         viewModelScope.launch {
-            runCatching { homeRepository.loadFeed(cursor = cursor) }
-                .onSuccess { page ->
-                    _uiState.value = _uiState.value.copy(
-                        recommendedFeed = _uiState.value.recommendedFeed + page.items,
-                        recommendedCursor = page.nextCursor
-                    )
-                }
-                .onFailure { _events.emit("Couldn't load more characters.") }
+            try {
+                val page = homeRepository.loadFeed(cursor = cursor)
+                _uiState.value = _uiState.value.copy(
+                    recommendedFeed = (_uiState.value.recommendedFeed + page.items).distinctBy { it.id }.filterNot { character -> _uiState.value.featuredRecommended.any { it.id == character.id } || _uiState.value.topPicks.any { it.id == character.id } },
+                    recommendedCursor = page.nextCursor
+                )
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _events.emit("Couldn't load more characters.")
+            } finally {
+                _uiState.value = _uiState.value.copy(isFeedLoading = false)
+            }
         }
     }
 
@@ -189,7 +202,11 @@ fun NewHomeRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val chatLauncher = rememberCharacterChatLauncher(
+        ensureConversation = viewModel::ensureConversation,
+        onOpenConversation = onOpenConversation,
+        snackbarHostState = snackbarHostState
+    )
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { snackbarHostState.showSnackbar(it) }
@@ -211,26 +228,21 @@ fun NewHomeRoute(
                 Column {
                     // Unread Header
                     SectionHeader(
-                        title = "Unread (${state.totalUnreadCount})",
+                        title = if (state.totalUnreadCount > 0) "Unread (${state.totalUnreadCount})" else "Recent chats",
                         modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                         onClick = onOpenChats
                     )
                     
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                     ) {
                         item {
                             CreateStoryNode(onClick = onOpenStudio)
                         }
-                        if (state.isFeedLoading && state.recentChats.isEmpty()) {
-                            items(3) {
-                                StoryNodePlaceholder()
-                            }
-                        }
-                        items(state.recentChats, key = { it.id }) { chat ->
+                        items((state.unreadChats + state.recentChats).distinctBy { it.characterId }, key = { it.characterId }) { chat ->
                             StoryNode(
                                 chat = chat,
                                 onClick = { onOpenConversation(chat.id) }
@@ -238,16 +250,28 @@ fun NewHomeRoute(
                         }
                     }
 
+                    if (state.featuredRecommended.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        SectionHeader("Recommended for you", Modifier.padding(horizontal = AppChrome.screenHorizontalPadding), null)
+                        Spacer(Modifier.height(10.dp))
+                        LazyRow(contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(state.featuredRecommended, key = { it.id }) { character ->
+                                CharacterSummaryCard(character, modifier = Modifier.width(154.dp), imageAspectRatio = 1f,
+                                    isOpening = chatLauncher.openingCharacterId == character.id,
+                                    enabled = chatLauncher.openingCharacterId == null) { chatLauncher.open(character.id) }
+                            }
+                        }
+                    }
                     if (state.topPicks.isNotEmpty() || state.isFeedLoading) {
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         SectionHeader(
                             title = "Top Picks",
                             modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                             onClick = null
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                         ) {
                             if (state.isFeedLoading && state.topPicks.isEmpty()) {
@@ -258,16 +282,10 @@ fun NewHomeRoute(
                             items(state.topPicks, key = { it.id }) { character ->
                                 TopPickCard(
                                     character = character,
+                                    isOpening = chatLauncher.openingCharacterId == character.id,
+                                    enabled = chatLauncher.openingCharacterId == null,
                                     onClick = {
-                                        scope.launch {
-                                            viewModel.ensureConversation(character.id)
-                                                .onSuccess(onOpenConversation)
-                                                .onFailure {
-                                                    snackbarHostState.showSnackbar(
-                                                        it.userFacingMessage("Couldn't open chat.")
-                                                    )
-                                                }
-                                        }
+                                        chatLauncher.open(character.id)
                                     }
                                 )
                             }
@@ -275,15 +293,15 @@ fun NewHomeRoute(
                     }
 
                     if (state.recentChats.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         SectionHeader(
                             title = "Continue",
                             modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
                             onClick = onOpenChats
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             contentPadding = PaddingValues(horizontal = AppChrome.screenHorizontalPadding)
                         ) {
                             items(state.recentChats, key = { "continue_${it.id}" }) { chat ->
@@ -295,7 +313,7 @@ fun NewHomeRoute(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     SectionHeader(
                         title = "Recommended",
                         modifier = Modifier.padding(horizontal = AppChrome.screenHorizontalPadding),
@@ -339,28 +357,20 @@ fun NewHomeRoute(
                 ) {
                     CharacterSummaryCard(
                         character = pair[0],
+                        isOpening = chatLauncher.openingCharacterId == pair[0].id,
+                        enabled = chatLauncher.openingCharacterId == null,
                         modifier = Modifier.weight(1f)
                     ) {
-                        scope.launch {
-                            viewModel.ensureConversation(pair[0].id)
-                                .onSuccess(onOpenConversation)
-                                .onFailure {
-                                    snackbarHostState.showSnackbar(it.userFacingMessage("Couldn't open chat."))
-                                }
-                        }
+                        chatLauncher.open(pair[0].id)
                     }
                     if (pair.size > 1) {
                         CharacterSummaryCard(
                             character = pair[1],
+                            isOpening = chatLauncher.openingCharacterId == pair[1].id,
+                            enabled = chatLauncher.openingCharacterId == null,
                             modifier = Modifier.weight(1f)
                         ) {
-                            scope.launch {
-                                viewModel.ensureConversation(pair[1].id)
-                                    .onSuccess(onOpenConversation)
-                                    .onFailure {
-                                        snackbarHostState.showSnackbar(it.userFacingMessage("Couldn't open chat."))
-                                    }
-                            }
+                            chatLauncher.open(pair[1].id)
                         }
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
@@ -386,11 +396,11 @@ fun NewHomeRoute(
 
 @Composable
 fun SectionHeader(title: String, modifier: Modifier = Modifier, onClick: (() -> Unit)?) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(interactionSource = interactionSource, indication = null) { onClick() } else Modifier)
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -416,7 +426,6 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, onClick: (() -> 
 
 @Composable
 fun CreateStoryNode(onClick: () -> Unit) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.width(80.dp)
@@ -426,7 +435,7 @@ fun CreateStoryNode(onClick: () -> Unit) {
                 .size(76.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+                .clickable(onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             AppIcon(
@@ -449,44 +458,50 @@ fun CreateStoryNode(onClick: () -> Unit) {
 
 @Composable
 fun StoryNode(chat: ConversationSummary, onClick: () -> Unit) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val showRedOutline = chat.unreadCount > 0
-    val showGreyOutline = !showRedOutline && chat.hasUnreadBadge
-    
+    val hasUnread = chat.unreadCount > 0
     val outlineColor = when {
-        showRedOutline -> MaterialTheme.colorScheme.error
-        showGreyOutline -> MaterialTheme.colorScheme.surfaceVariant
+        hasUnread -> MaterialTheme.colorScheme.error
+        chat.hasUnreadBadge -> MaterialTheme.colorScheme.outline
         else -> Color.Transparent
     }
-    
-    val outlineWidth = if (showRedOutline || showGreyOutline) 2.5.dp else 0.dp
-    val gapWidth = if (showRedOutline || showGreyOutline) 3.dp else 0.dp
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.width(80.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(76.dp + outlineWidth * 2 + gapWidth * 2)
-                .clip(CircleShape)
-                .border(outlineWidth, outlineColor, CircleShape)
-                .padding(outlineWidth + gapWidth)
-                .clickable(interactionSource = interactionSource, indication = null) { onClick() },
-            contentAlignment = Alignment.Center
-        ) {
-            CircleAvatar(
-                name = chat.characterName,
-                avatarUrl = chat.characterAvatarUrl,
-                modifier = Modifier.fillMaxSize()
-            )
+        Box(modifier = Modifier.size(76.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .border(2.dp, outlineColor, CircleShape)
+                    .clickable(onClick = onClick)
+                    .padding(5.dp)
+            ) {
+                CircleAvatar(
+                    name = chat.characterName,
+                    avatarUrl = chat.characterAvatarUrl,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            if (hasUnread) {
+                Text(
+                    text = if (chat.unreadCount > 99) "99+" else chat.unreadCount.toString(),
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .background(MaterialTheme.colorScheme.error, CircleShape)
+                        .border(2.dp, MaterialTheme.colorScheme.background, CircleShape)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = chat.characterName,
             style = MaterialTheme.typography.labelMedium,
-            color = if (showRedOutline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (showRedOutline) FontWeight.Bold else FontWeight.Normal,
+            color = if (hasUnread) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -501,22 +516,30 @@ fun StoryNodePlaceholder() {
     ) {
         CircleAvatarPlaceholder(size = 76.dp)
         Spacer(modifier = Modifier.height(8.dp))
-        ShimmerTextLine(width = 54.dp, height = 12.dp)
+        ShimmerTextBlock(
+            style = MaterialTheme.typography.labelMedium,
+            lineWidths = listOf(0.68f),
+            modifier = Modifier.width(54.dp)
+        )
     }
 }
 
 @Composable
-fun TopPickCard(character: CharacterSummary, onClick: () -> Unit) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+fun TopPickCard(
+    character: CharacterSummary,
+    isOpening: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier
-            .width(230.dp)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .width(220.dp)
+            .clickable(enabled = enabled, onClick = onClick)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(132.dp)
+                .height(176.dp)
         ) {
             CharacterPortrait(
                 name = character.name,
@@ -524,6 +547,13 @@ fun TopPickCard(character: CharacterSummary, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 alignment = BiasAlignment(0f, -0.8f)
             )
+            if (isOpening) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(36.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), CircleShape).padding(6.dp),
+                    strokeWidth = 2.dp
+                )
+            }
         }
 
             Column(
@@ -548,6 +578,7 @@ fun TopPickCard(character: CharacterSummary, onClick: () -> Unit) {
                         lineHeight = 18.sp
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.94f),
+                    minLines = 3,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -557,11 +588,9 @@ fun TopPickCard(character: CharacterSummary, onClick: () -> Unit) {
 
 @Composable
 fun TopPickCardPlaceholder() {
-    Column(modifier = Modifier.width(230.dp)) {
+    Column(modifier = Modifier.width(220.dp)) {
         ShimmerBox(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(132.dp),
+            modifier = Modifier.fillMaxWidth().height(176.dp),
             shape = RoundedCornerShape(12.dp)
         )
         Column(
@@ -569,28 +598,31 @@ fun TopPickCardPlaceholder() {
                 .fillMaxWidth()
                 .padding(start = 0.dp, top = 8.dp, end = 12.dp, bottom = 12.dp)
         ) {
-            ShimmerTextLine(width = 142.dp, height = 24.dp)
-            Spacer(modifier = Modifier.height(10.dp))
-            ShimmerTextLine(width = 190.dp, height = 15.dp)
-            Spacer(modifier = Modifier.height(7.dp))
-            ShimmerTextLine(width = 132.dp, height = 15.dp)
+            ShimmerTextBlock(
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 24.sp, lineHeight = 26.sp),
+                lineWidths = listOf(0.68f)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            ShimmerTextBlock(
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 18.sp),
+                lineWidths = listOf(0.94f, 0.86f, 0.62f)
+            )
         }
     }
 }
 
 @Composable
 fun ContinueNode(chat: ConversationSummary, onClick: () -> Unit) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Column(
         modifier = Modifier
-            .width(76.dp)
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+            .width(94.dp)
+            .clickable(onClick = onClick),
         horizontalAlignment = Alignment.Start
     ) {
         CharacterPortrait(
             name = chat.characterName,
             avatarUrl = chat.characterAvatarUrl,
-            modifier = Modifier.size(76.dp)
+            modifier = Modifier.size(94.dp)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(

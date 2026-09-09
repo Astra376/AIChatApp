@@ -16,7 +16,7 @@ object ChatScenePromptBuilder {
     )
 
     fun initialScene(character: CharacterSummary): ScenePrompt {
-        val source = listOf(character.name, character.tagline, character.bio, character.systemPrompt)
+        val source = listOf(character.name, character.tagline, character.bio, character.greeting)
             .joinToString(" ")
             .trim()
         val key = "initial:${stableHash(source.lowercase(Locale.US))}"
@@ -24,7 +24,7 @@ object ChatScenePromptBuilder {
     }
 
     fun initialScene(character: CharacterEntity): ScenePrompt {
-        val source = listOf(character.name, character.tagline, character.bio, character.systemPrompt)
+        val source = listOf(character.name, character.tagline, character.bio, character.greeting)
             .joinToString(" ")
             .trim()
         val key = "initial:${stableHash(source.lowercase(Locale.US))}"
@@ -41,7 +41,7 @@ object ChatScenePromptBuilder {
             val cue = extractSceneCue(message.visibleContent) ?: continue
             val source = "${character.name}: $cue"
             return ScenePrompt(
-                key = "scene:${stableHash(cue.lowercase(Locale.US))}",
+                key = "scene:${stableHash("${character.id}:${cue.lowercase(Locale.US)}")}",
                 prompt = backgroundPrompt(character.name, source)
             )
         }

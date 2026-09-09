@@ -5,6 +5,11 @@ const schemaMocks = vi.hoisted(() => ({
   ensureConversationStreamingSchema: vi.fn()
 }));
 
+const memorySchemaMocks = vi.hoisted(() => ({ensureConversationMemorySchema: vi.fn()}));
+const mutationMocks = vi.hoisted(() => ({editMessageAtomically: vi.fn(), rewindToMessageAtomically: vi.fn(), selectRegenerationAtomically: vi.fn()}));
+vi.mock("../../db/ensureConversationMemorySchema", () => memorySchemaMocks);
+vi.mock("../../db/queries/transcriptMutations", () => mutationMocks);
+
 const characterMocks = vi.hoisted(() => ({
   getCharacterById: vi.fn(),
   incrementCharacterActivity: vi.fn()
@@ -18,7 +23,7 @@ const conversationMocks = vi.hoisted(() => ({
   getMessageById: vi.fn(),
   insertMessage: vi.fn(),
   insertRegeneration: vi.fn(),
-  listMessages: vi.fn(),
+  listContextMessages: vi.fn(),
   listRegenerationsForConversation: vi.fn(),
   releaseConversationRun: vi.fn(),
   updateConversationActivity: vi.fn(),
@@ -30,6 +35,11 @@ const conversationMocks = vi.hoisted(() => ({
 const openRouterMocks = vi.hoisted(() => ({
   streamChatText: vi.fn()
 }));
+
+const policyMocks = vi.hoisted(() => ({resolveChatModel: vi.fn()}));
+const personaMocks = vi.hoisted(() => ({resolveConversationPersonaPrompt: vi.fn()}));
+vi.mock("./modelPolicy", () => policyMocks);
+vi.mock("../personas", () => personaMocks);
 
 const memoryMocks = vi.hoisted(() => ({
   buildCharacterMemoryPrompt: vi.fn(),
@@ -45,6 +55,7 @@ vi.mock("./memory", () => memoryMocks);
 
 import {
   continueAssistantAndStream,
+  editMessage, rewindConversation, selectRegeneration,
   regenerateLatestAssistantAndStream,
   sendMessageAndStream
 } from ".";
@@ -178,18 +189,18 @@ function createContext(): {
 
 function configureTranscript(operation: Operation): void {
   if (operation === "SEND") {
-    conversationMocks.listMessages.mockResolvedValue([]);
+    conversationMocks.listContextMessages.mockResolvedValue([]);
     conversationMocks.getMessageById.mockResolvedValue(null);
     return;
   }
 
   if (operation === "CONTINUE") {
-    conversationMocks.listMessages.mockResolvedValue([userMessageRecord()]);
+    conversationMocks.listContextMessages.mockResolvedValue([userMessageRecord()]);
     return;
   }
 
   const latestAssistant = assistantMessageRecord();
-  conversationMocks.listMessages.mockResolvedValue([userMessageRecord(), latestAssistant]);
+  conversationMocks.listContextMessages.mockResolvedValue([userMessageRecord(), latestAssistant]);
   conversationMocks.getMessageById.mockImplementation(async (_env, messageId: string) =>
     messageId === ASSISTANT_MESSAGE_ID ? latestAssistant : null
   );
@@ -251,8 +262,11 @@ function configureProvider(stopPoint: StopPoint): {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  policyMocks.resolveChatModel.mockImplementation(async (context: RequestContext) => ({env: context.env, reasoning: {enabled: false, exclude: true}, reasoningEnabled: false, maxTokens: 1200, displayName: "Meek Standard"}));
+  personaMocks.resolveConversationPersonaPrompt.mockResolvedValue("");
 
   schemaMocks.ensureConversationStreamingSchema.mockResolvedValue(undefined);
+  memorySchemaMocks.ensureConversationMemorySchema.mockResolvedValue(undefined);
   characterMocks.getCharacterById.mockResolvedValue({
     id: CHARACTER_ID,
     owner_user_id: "creator-1",
@@ -279,7 +293,7 @@ beforeEach(() => {
   conversationMocks.getConversationSummaryById.mockResolvedValue(summaryRecord());
   conversationMocks.insertMessage.mockResolvedValue(undefined);
   conversationMocks.insertRegeneration.mockResolvedValue(undefined);
-  conversationMocks.listMessages.mockResolvedValue([]);
+  conversationMocks.listContextMessages.mockResolvedValue([]);
   conversationMocks.listRegenerationsForConversation.mockResolvedValue([]);
   conversationMocks.releaseConversationRun.mockResolvedValue(undefined);
   conversationMocks.updateConversationActivity.mockResolvedValue(undefined);
@@ -295,6 +309,43 @@ beforeEach(() => {
 describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
   "%s stream lifecycle",
   (operation) => {
+    it("exposes accepted and incremental delta events before generation completes", async () => {
+      configureTranscript(operation);
+      const finish = deferred();
+      openRouterMocks.streamChatText.mockImplementation(async function* () {
+        yield "first chunk";
+        await finish.promise;
+        yield " second chunk";
+      });
+      const { context } = createContext();
+      const response = await startOperation(operation, context);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      expect(decoder.decode((await reader.read()).value)).toContain('"type":"accepted_');
+      expect(decoder.decode((await reader.read()).value)).toContain('"textDelta":"first chunk"');
+      expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(0);
+      expect(insertedRegenerations()).toHaveLength(0);
+      finish.resolve();
+      let remaining = "";
+      for (let next = await reader.read(); !next.done; next = await reader.read()) remaining += decoder.decode(next.value);
+      expect(remaining).toContain('"textDelta":" second chunk"');
+      expect(remaining).toContain('"type":"completed_');
+    });
+
+    it("negotiates status metadata after acceptance without exposing reasoning text", async () => {
+      configureTranscript(operation);
+      openRouterMocks.streamChatText.mockImplementation(async function* () {yield "Visible reply"});
+      const {context} = createContext();
+      context.request.headers.set("X-Chat-Status", "1");
+      policyMocks.resolveChatModel.mockResolvedValue({env: context.env, reasoning: {enabled: true, exclude: true}, reasoningEnabled: true, maxTokens: 2048, displayName: "Meek Ultra"});
+      const response = await startOperation(operation, context);
+      const events = (await response.text()).trim().split("\n\n").map(event => JSON.parse(event.slice(6)));
+      expect(events[0].type).toContain("accepted_");
+      expect(events[1]).toEqual({type: "status", runId: events[0].runId, status: "Thinking", model: "Meek Ultra"});
+      expect(events[2].type).toBe("delta");
+      expect(events.filter(event => event.type === "status")).toHaveLength(1);
+    });
+
     it("stops before the first chunk without deleting or fabricating transcript state", async () => {
       configureTranscript(operation);
       const provider = configureProvider("before first chunk");
@@ -346,7 +397,8 @@ describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
           expect.objectContaining({
             messageId: ASSISTANT_MESSAGE_ID,
             selectedRegenerationId: regenerations[0].id
-          })
+          }),
+          expect.any(String)
         );
         expect(insertedMessages()).toEqual([]);
       } else {
@@ -419,7 +471,7 @@ describe.each<Operation>(["SEND", "CONTINUE", "REGENERATE"])(
   }
 );
 
-it("uses a lease longer than the client timeout and also settles through ReadableStream.cancel", async () => {
+it("uses a bounded lease longer than the provider budget and also settles through ReadableStream.cancel", async () => {
   configureTranscript("CONTINUE");
   const provider = configureProvider("mid-stream");
   const { context, removeAbortListener } = createContext();
@@ -436,7 +488,27 @@ it("uses a lease longer than the client timeout and also settles through Readabl
   const claimCall = conversationMocks.claimConversationRun.mock.calls[0];
   const claimedAt = claimCall[3] as number;
   const expiresAt = claimCall[4] as number;
-  expect(expiresAt - claimedAt).toBeGreaterThan(180_000);
+  expect(expiresAt - claimedAt).toBe(75_000);
   expect(insertedMessages().filter((message) => message.role === "assistant")).toHaveLength(1);
   expect(removeAbortListener).toHaveBeenCalled();
+});
+
+it("installs derived-memory invalidation before the first edit, rewind or variant change after an upgrade", async () => {
+  const {context} = createContext();
+  conversationMocks.getMessageById.mockResolvedValue(assistantMessageRecord());
+  let installed = false;
+  memorySchemaMocks.ensureConversationMemorySchema.mockImplementation(async () => {installed = true;});
+  const write = async () => {expect(installed).toBe(true); return true;};
+  mutationMocks.editMessageAtomically.mockImplementation(write);
+  mutationMocks.rewindToMessageAtomically.mockImplementation(async () => {expect(installed).toBe(true);return 1;});
+  mutationMocks.selectRegenerationAtomically.mockImplementation(write);
+  for (const mutate of [
+    () => editMessage(context, ASSISTANT_MESSAGE_ID, "Edited history"),
+    () => rewindConversation(context, ASSISTANT_MESSAGE_ID),
+    () => selectRegeneration(context, ASSISTANT_MESSAGE_ID, null)
+  ]) {
+    installed = false;
+    await mutate();
+  }
+  expect(memorySchemaMocks.ensureConversationMemorySchema).toHaveBeenCalledTimes(3);
 });

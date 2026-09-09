@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.example.aichat.core.design.AppTheme
 import com.example.aichat.core.model.CharacterSummary
 import com.example.aichat.core.model.CharacterVisibility
@@ -13,6 +14,7 @@ import com.example.aichat.core.model.ThemeMode
 import com.example.aichat.feature.character.CharacterProfileContent
 import com.example.aichat.feature.character.CharacterProfileUiState
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -30,18 +32,21 @@ class CharacterSubpageContentTest {
             updatedAt = now - 2 * 3_600_000L
         )
         val closed = mutableStateOf(false)
+        val actions = mutableListOf<String>()
 
         composeRule.setContent {
             AppTheme(themeMode = ThemeMode.LIGHT) {
                 CharacterDetailsContent(
                     state = CharacterProfileUiState(character, isLoading = false),
                     onClose = { closed.value = true },
-                    onViewCharacter = {},
-                    onViewCreator = {},
+                    onViewCharacter = { actions += "character" },
+                    onViewCreator = { actions += "creator" },
                     onShare = {},
                     onToggleLike = {},
-                    onRefreshChat = {},
-                    onStartNewChat = {},
+                    onRefreshChat = { actions += "refresh" },
+                    onStartNewChat = { actions += "new" },
+                    onChatPreferences = { actions += "preferences" },
+                    onOpenPersonas = { actions += "persona" },
                     onRetry = {}
                 )
             }
@@ -53,12 +58,16 @@ class CharacterSubpageContentTest {
         composeRule.onNodeWithText("1 minute ago").assertIsDisplayed()
         composeRule.onNodeWithText("Last Updated").assertIsDisplayed()
         composeRule.onNodeWithText("2 hours ago").assertIsDisplayed()
-        composeRule.onNodeWithText("View Character Profile").assertIsDisplayed()
-        composeRule.onNodeWithText("View Creator Profile").assertIsDisplayed()
-        composeRule.onNodeWithText("Refresh this chat").assertIsDisplayed()
-        composeRule.onNodeWithText("Start new chat").assertIsDisplayed()
+        // The action list scrolls on smaller screens and at larger font sizes.
+        // Every action must remain reachable, visible and connected to its callback.
+        listOf("View Character Profile", "View Creator Profile", "Persona", "Chat preferences", "Refresh this chat", "Start new chat").forEach { label ->
+            composeRule.onNodeWithText(label).performScrollTo().assertIsDisplayed().performClick()
+        }
+        composeRule.runOnIdle {
+            assertEquals(listOf("character", "creator", "persona", "preferences", "refresh", "new"), actions)
+        }
 
-        composeRule.onNodeWithContentDescription("Close character details").performClick()
+        composeRule.onNodeWithContentDescription("Close character details").performScrollTo().assertIsDisplayed().performClick()
         composeRule.runOnIdle {
             assertTrue(closed.value)
         }

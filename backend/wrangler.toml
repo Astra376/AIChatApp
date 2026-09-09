@@ -4,10 +4,23 @@ compatibility_date = "2026-04-01"
 compatibility_flags = ["enable_request_signal"]
 
 [vars]
+# Explicitly enabled for the phone preview; disabled automatically when billing is configured.
+ULTRA_PREVIEW_ENABLED = "true"
 GOOGLE_WEB_CLIENT_ID = "1081775489416-vdlfr5tjuea8l826mqog05ijfp3ltk76.apps.googleusercontent.com"
-OPENROUTER_MODEL = "deepseek/deepseek-v4-flash"
-OPENROUTER_FALLBACK_MODELS = "deepseek/deepseek-v3.2"
-FAL_MODEL = "fal-ai/nano-banana-2"
+OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731"
+OPENROUTER_PROVIDERS = "venice"
+OPENROUTER_ULTRA_MODEL = "deepseek/deepseek-v4-pro-0813"
+OPENROUTER_FALLBACK_MODELS = ""
+# Selected from the actual image comparison in docs/image-model-evaluation.md.
+OPENROUTER_PORTRAIT_REALISTIC_MODEL = "black-forest-labs/flux.2-pro"
+OPENROUTER_PORTRAIT_STYLIZED_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_EXPRESSION_REALISTIC_MODEL = "openai/gpt-image-1-mini"
+OPENROUTER_EXPRESSION_STYLIZED_MODEL = "openai/gpt-image-1-mini"
+OPENROUTER_EXPRESSION_REALISTIC_QUALITY = "medium"
+OPENROUTER_EXPRESSION_STYLIZED_QUALITY = "medium"
+OPENROUTER_BACKGROUND_MODEL = "black-forest-labs/flux.2-klein-4b"
+OPENROUTER_PORTRAIT_PREVIEW_MODEL = "google/gemini-3.1-flash-image"
+OPENROUTER_PORTRAIT_PREMIUM_MODEL = "google/gemini-3-pro-image"
 R2_PUBLIC_BASE_URL = "https://character-chat-worker.robloxproxy.workers.dev/v1/assets"
 
 [[d1_databases]]
@@ -21,3 +34,12 @@ bucket_name = "character-chat-assets"
 
 [triggers]
 crons = ["*/15 * * * *"]
+
+
+[[durable_objects.bindings]]
+name = "IMAGE_JOBS"
+class_name = "ImageGenerationJob"
+
+[[migrations]]
+tag = "image-jobs-v1"
+new_sqlite_classes = ["ImageGenerationJob"]

@@ -16,8 +16,9 @@ android {
         applicationId = "com.example.aichat"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("AI_CHAT_VERSION_CODE").orElse("2").get().toInt()
+        versionName = providers.gradleProperty("AI_CHAT_VERSION_NAME").orElse("1.1.0").get()
+        buildConfigField("String", "BUILD_SHA", "\"${providers.gradleProperty("AI_CHAT_BUILD_SHA").orElse("local").get()}\"")
 
         testInstrumentationRunner = "com.example.aichat.HiltTestRunner"
 
@@ -41,6 +42,8 @@ android {
             signingConfig = signingConfigs.getByName("sharedDebug")
         }
         release {
+            signingConfig = signingConfigs.getByName("sharedDebug")
+            isDebuggable = false
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -68,6 +71,8 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("generated/image-fixtures"))
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
@@ -101,6 +106,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.navigation:navigation-compose:2.8.4")
+    // The callback API needs only the Java artifact; KTX 9.1 requires newer Kotlin metadata.
+    implementation("com.android.billingclient:billing:9.1.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
@@ -141,6 +148,8 @@ dependencies {
     implementation("androidx.hilt:hilt-work:1.2.0")
     kapt("androidx.hilt:hilt-compiler:1.2.0")
 
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("app.cash.turbine:turbine:1.1.0")

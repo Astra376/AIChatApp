@@ -1,3 +1,4 @@
+import { ensureNotificationSchema } from "../../db/ensureNotificationSchema";
 import type { RequestContext } from "../../env";
 import { ensureConversationStreamingSchema } from "../../db/ensureConversationStreamingSchema";
 import { getCharacterById } from "../../db/queries/characters";
@@ -46,7 +47,10 @@ export async function createConversation(
   forceNew = false
 ) {
   await ensureConversationStreamingSchema(context.env);
-  const character = await getCharacterById(context.env, context.user!.userId, characterId);
+  const [character, existing] = await Promise.all([
+    getCharacterById(context.env, context.user!.userId, characterId),
+    forceNew ? Promise.resolve(null) : findConversationByOwnerAndCharacter(context.env, context.user!.userId, characterId)
+  ]);
   if (!character) {
     throw new AppError(404, "CHARACTER_NOT_FOUND", "Character not found.");
   }
@@ -54,9 +58,6 @@ export async function createConversation(
     forbidden("Private characters are only visible to their owner.");
   }
 
-  const existing = forceNew
-    ? null
-    : await findConversationByOwnerAndCharacter(context.env, context.user!.userId, characterId);
   if (existing) {
     const summary = await getConversationSummaryById(context.env, context.user!.userId, existing.id);
     if (summary) {
@@ -125,12 +126,14 @@ export async function getConversationDetail(context: RequestContext, conversatio
     forbidden("Conversations are private to their owner.");
   }
 
-  const character = await getCharacterById(context.env, context.user!.userId, conversation.character_id);
+  const [character, messages, regenerations] = await Promise.all([
+    getCharacterById(context.env, context.user!.userId, conversation.character_id),
+    listMessages(context.env, conversationId),
+    listRegenerationsForConversation(context.env, conversationId)
+  ]);
   if (!character) {
     throw new AppError(404, "CHARACTER_NOT_FOUND", "Character not found.");
   }
-  const messages = await listMessages(context.env, conversationId);
-  const regenerations = await listRegenerationsForConversation(context.env, conversationId);
   const grouped = new Map<string, typeof regenerations>();
   for (const regeneration of regenerations) {
     const list = grouped.get(regeneration.message_id) ?? [];
@@ -142,6 +145,12 @@ export async function getConversationDetail(context: RequestContext, conversatio
     id: conversation.id,
     ownerUserId: conversation.owner_user_id,
     conversationVersion: conversation.version,
+    // Only the owner can read this endpoint. The exact run ID lets a fresh
+    // client recover a stopped stream without cancelling a newer run by guess.
+    activeRunId: conversation.active_run_expires_at != null && conversation.active_run_expires_at > Date.now()
+      ? conversation.active_run_id : null,
+    activeRunExpiresAt: conversation.active_run_expires_at != null && conversation.active_run_expires_at > Date.now()
+      ? conversation.active_run_expires_at : null,
     character: toCharacterDto(character, context.user!.userId),
     messages: messages.map((message) => ({
       id: message.id,
@@ -173,7 +182,10 @@ export async function markConversationRead(context: RequestContext, conversation
     forbidden("Conversations are private to their owner.");
   }
 
-  await context.env.DB.prepare(
-    "UPDATE conversations SET unread_count = 0 WHERE id = ?"
-  ).bind(conversationId).run();
+  await ensureNotificationSchema(context.env);
+  await context.env.DB.batch([
+    context.env.DB.prepare("UPDATE conversations SET unread_count = 0, has_unread_badge = 0 WHERE id = ?").bind(conversationId),
+    context.env.DB.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE user_id = ? AND conversation_id = ?")
+      .bind(Date.now(), context.user!.userId, conversationId)
+  ]);
 }

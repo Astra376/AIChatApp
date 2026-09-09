@@ -1,16 +1,15 @@
 package com.example.aichat.feature.chat
 
-import androidx.room.withTransaction
 import com.example.aichat.core.db.AppDatabase
 import com.example.aichat.core.db.ConversationDao
 import com.example.aichat.core.db.ConversationSceneDao
 import com.example.aichat.core.db.ConversationSceneEntity
-import com.example.aichat.core.db.toModel
 import com.example.aichat.core.network.GenerateChatBackgroundRequestDto
 import com.example.aichat.core.network.ImageApi
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -24,180 +23,27 @@ class ChatBackgroundRepository @Inject constructor(
     private val imageApi: ImageApi
 ) {
     private val generationLocks = ConcurrentHashMap<String, Mutex>()
-
-    suspend fun ensureInitialBackground(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            generationLock(conversationId).withLock {
-                ensureInitialBackgroundLocked(conversationId)
-            }
-        }
+    suspend fun ensureInitialBackground(conversationId: String): Result<Unit> = refresh(conversationId, initial = true)
+    suspend fun refreshIfSceneChanged(conversationId: String): Result<Unit> = refresh(conversationId)
+    suspend fun repairFailedBackground(conversationId: String, failedImageUrl: String): Result<Unit> {
+        // Fetch the authoritative current scene; never create a new paid image
+        // merely because Coil had a transient download failure.
+        if (sceneDao.getByConversation(conversationId)?.imageUrl != failedImageUrl) return Result.success(Unit)
+        return refresh(conversationId)
     }
-
-    suspend fun repairFailedBackground(
-        conversationId: String,
-        failedImageUrl: String
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            generationLock(conversationId).withLock {
-                val failedUrl = failedImageUrl.trim()
-                if (failedUrl.isEmpty()) return@withLock
-
-                val detail = database.withTransaction {
-                    val conversation = conversationDao.getById(conversationId)
-                        ?: return@withTransaction null
-                    val character = database.characterDao().getById(conversation.characterId)
-                        ?: return@withTransaction null
-                    val scene = sceneDao.getByConversation(conversationId)
-                    Triple(conversation, character, scene)
-                } ?: return@withLock
-                val (conversation, character, scene) = detail
-                val sceneFailed = scene?.imageUrl == failedUrl
-                val initialFailed = character.initialSceneUrl == failedUrl
-                if (!sceneFailed && !initialFailed) return@withLock
-
-                val hasUsableInitial =
-                    !character.initialSceneUrl.isNullOrBlank() &&
-                        !character.initialSceneKey.isNullOrBlank() &&
-                        !initialFailed
-                if (sceneFailed && hasUsableInitial) {
-                    sceneDao.deleteByConversation(conversationId)
-                    ensureInitialBackgroundLocked(conversationId)
-                    return@withLock
-                }
-
-                // Do not discard the old URL until its replacement exists. A
-                // temporary network/provider failure must not make the chat
-                // permanently lose its last persisted background.
-                val replacementScene = ChatScenePromptBuilder.initialScene(character)
-                val replacementUrl = generateBackground(replacementScene)
-                require(replacementUrl.isNotEmpty()) { "Image generation returned an empty URL." }
-                database.withTransaction {
-                    val currentCharacter = database.characterDao().getById(character.id)
-                        ?: return@withTransaction
-                    val currentScene = sceneDao.getByConversation(conversationId)
-                    if (
-                        currentCharacter.initialSceneUrl != failedUrl
-                        && currentScene?.imageUrl != failedUrl
-                    ) {
-                        return@withTransaction
-                    }
-                    database.characterDao().upsert(
-                        currentCharacter.copy(
-                            initialSceneUrl = replacementUrl,
-                            initialSceneKey = replacementScene.key
-                        )
-                    )
-                    sceneDao.upsert(
-                        ConversationSceneEntity(
-                            conversationId = conversation.id,
-                            sceneKey = replacementScene.key,
-                            imageUrl = replacementUrl,
-                            prompt = replacementScene.prompt,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                    )
-                }
+    private suspend fun refresh(conversationId: String, initial: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            generationLocks.computeIfAbsent(conversationId) { Mutex() }.withLock {
+                val conversation = conversationDao.getById(conversationId) ?: return@withLock
+                val cached = sceneDao.getByConversation(conversationId)
+                if (initial && cached != null && cached.sceneKey.startsWith("anime:") && cached.updatedAt >= conversation.updatedAt) return@withLock
+                val requestedAt = System.currentTimeMillis()
+                val scene = imageApi.generateChatBackground(GenerateChatBackgroundRequestDto(conversationId = conversationId))
+                require(scene.imageUrl.isNotBlank() && scene.sceneKey.isNotBlank()) { "Scene background is not ready." }
+                sceneDao.upsert(ConversationSceneEntity(conversationId, "anime:${scene.sceneKey}", scene.imageUrl, scene.prompt, requestedAt))
             }
-        }
-    }
-
-    suspend fun refreshIfSceneChanged(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            generationLock(conversationId).withLock {
-                val detail = database.withTransaction {
-                    val conversation = conversationDao.getById(conversationId) ?: return@withTransaction null
-                    val character =
-                        database.characterDao().getById(conversation.characterId) ?: return@withTransaction null
-                    val regenerations = database.assistantRegenerationDao()
-                        .getConversationRegenerations(conversationId)
-                        .groupBy { it.messageId }
-                    val messages = database.messageDao().getMessages(conversationId).map { entity ->
-                        entity.toModel(regenerations[entity.id].orEmpty())
-                    }
-                    Triple(character.toModel(), messages, sceneDao.getByConversation(conversationId))
-                } ?: return@withLock
-
-                val (character, messages, existingScene) = detail
-                val scene = ChatScenePromptBuilder.changedScene(character, messages) ?: return@withLock
-                if (scene.key == existingScene?.sceneKey || scene.key == character.initialSceneKey) return@withLock
-
-                val imageUrl = generateBackground(scene)
-                sceneDao.upsert(
-                    ConversationSceneEntity(
-                        conversationId = conversationId,
-                        sceneKey = scene.key,
-                        imageUrl = imageUrl,
-                        prompt = scene.prompt,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            }
-        }
-    }
-
-    private fun generationLock(conversationId: String): Mutex =
-        generationLocks.computeIfAbsent(conversationId) { Mutex() }
-
-    private suspend fun ensureInitialBackgroundLocked(conversationId: String) {
-        val detail = database.withTransaction {
-            val conversation = conversationDao.getById(conversationId) ?: return@withTransaction null
-            val character =
-                database.characterDao().getById(conversation.characterId) ?: return@withTransaction null
-            Pair(conversation, character)
-        } ?: return
-        val (conversation, character) = detail
-        if (!character.initialSceneUrl.isNullOrBlank() && !character.initialSceneKey.isNullOrBlank()) {
-            sceneDao.upsert(
-                ConversationSceneEntity(
-                    conversationId = conversation.id,
-                    sceneKey = character.initialSceneKey,
-                    imageUrl = character.initialSceneUrl,
-                    prompt = "",
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-            return
-        }
-
-        val scene = ChatScenePromptBuilder.initialScene(character)
-        val imageUrl = generateBackground(scene)
-        database.withTransaction {
-            database.characterDao().upsert(
-                character.copy(
-                    initialSceneUrl = imageUrl,
-                    initialSceneKey = scene.key
-                )
-            )
-            sceneDao.upsert(
-                ConversationSceneEntity(
-                    conversationId = conversation.id,
-                    sceneKey = scene.key,
-                    imageUrl = imageUrl,
-                    prompt = scene.prompt,
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-        }
-    }
-
-    private suspend fun generateBackground(scene: ScenePrompt): String {
-        var lastError: Throwable? = null
-        repeat(2) { attempt ->
-            try {
-                val imageUrl = imageApi.generateChatBackground(
-                    GenerateChatBackgroundRequestDto(scene.prompt, scene.key)
-                ).imageUrl.trim()
-                require(imageUrl.isNotEmpty()) { "Image generation returned an empty URL." }
-                return imageUrl
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                lastError = error
-                if (attempt == 0) {
-                    kotlinx.coroutines.delay(750L)
-                }
-            }
-        }
-        throw checkNotNull(lastError)
+            Result.success(Unit)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { Result.failure(e) }
     }
 }
